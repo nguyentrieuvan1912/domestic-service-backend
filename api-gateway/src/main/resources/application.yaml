@@ -1,0 +1,12 @@
+server:
+  port: 8080
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      routes:
+        - id: dummy-route
+          uri: http://localhost:8080 # Trỏ tạm về chính nó để test
+          predicates:
+            - Path=/api/**
