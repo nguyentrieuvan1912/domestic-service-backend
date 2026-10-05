@@ -34,6 +34,7 @@ services:
       args:
         SERVICE: identity-service
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev-seed}
       SERVER_PORT: 8080
       DB_HOST: postgres
       DB_PORT: 5432
@@ -57,6 +58,7 @@ services:
       args:
         SERVICE: catalog-service
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev-seed}
       SERVER_PORT: 8080
       DB_HOST: postgres
       DB_PORT: 5432
@@ -80,6 +82,7 @@ services:
       args:
         SERVICE: booking-service
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev-seed}
       SERVER_PORT: 8080
       DB_HOST: postgres
       DB_PORT: 5432
@@ -103,6 +106,7 @@ services:
       args:
         SERVICE: finance-service
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev-seed}
       SERVER_PORT: 8080
       DB_HOST: postgres
       DB_PORT: 5432
@@ -126,6 +130,7 @@ services:
       args:
         SERVICE: ai-assistant-service
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev-seed}
       SERVER_PORT: 8080
       DB_HOST: postgres
       DB_PORT: 5432

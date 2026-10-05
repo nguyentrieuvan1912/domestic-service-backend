@@ -50,9 +50,12 @@ và cơ chế reconciliation cho payment/refund/earning; không gọi HTTP rồi
 ## Việc cấu hình đã làm và việc nghiệp vụ chưa làm
 
 Đã làm: 6 app skeleton, parent Maven, common-web, routes/CORS, 5 database/role,
-Flyway baseline, Docker build/Compose, script chạy, tests, CI và hướng dẫn Git.
-Chưa làm: business entities/endpoints, JWT/security, thanh toán thật, AI provider,
+Flyway V1/V2, 53 bảng domain/kỹ thuật, seed demo local, Docker build/Compose,
+script chạy/kiểm tra database, tests, CI, hướng dẫn Git và ghi chú đồng bộ Class Diagram.
+Chưa làm: JPA business entities/endpoints, JWT/security, thanh toán thật, AI provider,
 matching/CP-SAT, message broker và notification. Không coi system/info là API nghiệp vụ hoàn chỉnh.
 
 Người 2 không phải tạo lại project, Dockerfile, database hoặc dependency nền.
+Người 2 đọc docs/database/CLASS_DIAGRAM_SYNC.md và schema V2 để viết entity/API;
+schema bổ sung dùng V3, không sửa V2 đã áp dụng.
 Nếu cần dependency riêng, thêm trong pom.xml của service mình; chỉ phối hợp sửa parent khi cần version chung.

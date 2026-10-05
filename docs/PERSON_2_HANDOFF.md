@@ -23,7 +23,9 @@ Không tạo endpoint giả báo thành công thanh toán/đăng nhập trong co
 
 ## Phần việc của bạn theo thứ tự
 
-1. Booking: thiết kế entity/status và migration V2; preview/create Mode A, giữ slot/chống trùng lịch.
+1. Booking: đọc schema V2 và docs/database/CLASS_DIAGRAM_SYNC.md, viết JPA entity/status;
+   schema đã tạo sẵn, thay đổi tiếp theo dùng migration V3; làm preview/create Mode A.
+   staff_reservations đã có exclusion constraint chống slot trùng; triển khai hold/expiry ở application.
 2. Staff: availability, vùng hoạt động, năng lực do Admin duyệt, nhận/từ chối việc và trạng thái thực hiện.
 3. Mode B: lọc ràng buộc, chấm điểm, assignment; tối ưu CP-SAT sau khi flow cơ bản chạy.
 4. Hủy booking, lịch sử, review; tích hợp API Finance của người 1 cho payment/refund/earning.
@@ -58,5 +60,6 @@ git push -u origin feat/p2-booking-preview
 Tạo PR vào main; CI phải pass. Mỗi PR một nghiệp vụ nhỏ, không format cả repo.
 Trước khi rebase cần commit hoặc stash thay đổi local. Không force-push nhánh chung/main.
 Khi sửa root pom.xml, common-web, compose.yml hoặc Gateway, báo người 1 trước.
-Trong một service, chỉ owner tạo migration mới để không trùng V2/V3.
+Trong một service, chỉ owner tạo migration mới để không trùng version. V1/V2 đã áp dụng, không sửa.
+Booking/AI đã có dữ liệu mẫu local; 6 bảng vận hành của toàn hệ thống để trống có chủ ý.
 Đọc docs/GIT_WORKFLOW.md và docs/api-contracts/README.md trước khi code tích hợp.
