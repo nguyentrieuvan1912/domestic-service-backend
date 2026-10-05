@@ -1,0 +1,163 @@
+name: domestic-service
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-domestic_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_admin_change_me}
+      IDENTITY_DB_USER: ${IDENTITY_DB_USER:-identity_app}
+      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD:-local_identity_change_me}
+      CATALOG_DB_USER: ${CATALOG_DB_USER:-catalog_app}
+      CATALOG_DB_PASSWORD: ${CATALOG_DB_PASSWORD:-local_catalog_change_me}
+      BOOKING_DB_USER: ${BOOKING_DB_USER:-booking_app}
+      BOOKING_DB_PASSWORD: ${BOOKING_DB_PASSWORD:-local_booking_change_me}
+      FINANCE_DB_USER: ${FINANCE_DB_USER:-finance_app}
+      FINANCE_DB_PASSWORD: ${FINANCE_DB_PASSWORD:-local_finance_change_me}
+      AI_DB_USER: ${AI_DB_USER:-ai_app}
+      AI_DB_PASSWORD: ${AI_DB_PASSWORD:-local_ai_change_me}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/01-init-databases.sh:/docker-entrypoint-initdb.d/01-init-databases.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  identity-service:
+    profiles: ["backend"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        SERVICE: identity-service
+    environment:
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      IDENTITY_DB_USER: ${IDENTITY_DB_USER:-identity_app}
+      IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD:-local_identity_change_me}
+      IDENTITY_SERVICE_URL: http://identity-service:8080
+      CATALOG_SERVICE_URL: http://catalog-service:8080
+      BOOKING_SERVICE_URL: http://booking-service:8080
+      FINANCE_SERVICE_URL: http://finance-service:8080
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  catalog-service:
+    profiles: ["backend"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        SERVICE: catalog-service
+    environment:
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      CATALOG_DB_USER: ${CATALOG_DB_USER:-catalog_app}
+      CATALOG_DB_PASSWORD: ${CATALOG_DB_PASSWORD:-local_catalog_change_me}
+      IDENTITY_SERVICE_URL: http://identity-service:8080
+      CATALOG_SERVICE_URL: http://catalog-service:8080
+      BOOKING_SERVICE_URL: http://booking-service:8080
+      FINANCE_SERVICE_URL: http://finance-service:8080
+    ports:
+      - "127.0.0.1:8082:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  booking-service:
+    profiles: ["backend"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        SERVICE: booking-service
+    environment:
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      BOOKING_DB_USER: ${BOOKING_DB_USER:-booking_app}
+      BOOKING_DB_PASSWORD: ${BOOKING_DB_PASSWORD:-local_booking_change_me}
+      IDENTITY_SERVICE_URL: http://identity-service:8080
+      CATALOG_SERVICE_URL: http://catalog-service:8080
+      BOOKING_SERVICE_URL: http://booking-service:8080
+      FINANCE_SERVICE_URL: http://finance-service:8080
+    ports:
+      - "127.0.0.1:8083:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  finance-service:
+    profiles: ["backend"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        SERVICE: finance-service
+    environment:
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      FINANCE_DB_USER: ${FINANCE_DB_USER:-finance_app}
+      FINANCE_DB_PASSWORD: ${FINANCE_DB_PASSWORD:-local_finance_change_me}
+      IDENTITY_SERVICE_URL: http://identity-service:8080
+      CATALOG_SERVICE_URL: http://catalog-service:8080
+      BOOKING_SERVICE_URL: http://booking-service:8080
+      FINANCE_SERVICE_URL: http://finance-service:8080
+    ports:
+      - "127.0.0.1:8084:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  ai-assistant-service:
+    profiles: ["backend"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        SERVICE: ai-assistant-service
+    environment:
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      AI_DB_USER: ${AI_DB_USER:-ai_app}
+      AI_DB_PASSWORD: ${AI_DB_PASSWORD:-local_ai_change_me}
+      IDENTITY_SERVICE_URL: http://identity-service:8080
+      CATALOG_SERVICE_URL: http://catalog-service:8080
+      BOOKING_SERVICE_URL: http://booking-service:8080
+      FINANCE_SERVICE_URL: http://finance-service:8080
+    ports:
+      - "127.0.0.1:8085:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  api-gateway:
+    profiles: ["backend"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        SERVICE: api-gateway
+    environment:
+      SERVER_PORT: 8080
+      IDENTITY_SERVICE_URL: http://identity-service:8080
+      CATALOG_SERVICE_URL: http://catalog-service:8080
+      BOOKING_SERVICE_URL: http://booking-service:8080
+      FINANCE_SERVICE_URL: http://finance-service:8080
+      AI_SERVICE_URL: http://ai-assistant-service:8080
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8086}
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+volumes:
+  postgres-data:

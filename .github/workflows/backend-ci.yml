@@ -1,0 +1,33 @@
+name: Backend CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - run: sh ./mvnw -B --no-transfer-progress verify
+      - run: docker compose --profile backend config --quiet
+      - name: Verify PostgreSQL migrations and gateway end to end
+        run: |
+          docker compose --profile backend up -d --build
+          for service in identity catalog booking finance ai-assistant; do
+            curl --fail --retry 60 --retry-delay 2 --retry-all-errors --max-time 5 \
+              "http://localhost:8080/api/v1/$service/system/info"
+          done
+      - name: Container logs
+        if: failure()
+        run: docker compose --profile backend logs --no-color
+      - name: Stop containers
+        if: always()
+        run: docker compose --profile backend down
