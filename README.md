@@ -1,8 +1,9 @@
 # Domestic Service Backend
 
 Backend monorepo cho nhóm 2 người. Mobile và Web giữ repo riêng.
-Nền tảng hiện tại là **khung cấu hình chạy được**, chưa triển khai đăng nhập, CRUD,
-booking, thanh toán hay AI. Endpoint system/info chỉ kiểm tra kết nối, không phải API nghiệp vụ.
+Nền tảng hiện tại có cấu hình chạy được, 53 bảng domain/kỹ thuật theo sơ đồ Class V3 và dữ liệu demo local.
+Chưa triển khai đăng nhập, CRUD, booking, thanh toán hay AI.
+Endpoint system/info chỉ kiểm tra kết nối, không phải API nghiệp vụ.
 
 Java 21 · Spring Boot 4.1.1 · Spring Cloud 2025.1.3 · Maven Wrapper · PostgreSQL 17 · Docker Compose.
 Cặp phiên bản Boot/Cloud theo [compatibility matrix của Spring](https://spring.io/projects/spring-cloud/).
@@ -79,8 +80,15 @@ Nếu container service đang chạy, dừng container đó trước khi chạy 
 Postgres init tự tạo 5 database cùng 5 role riêng; role thường không có quyền truy cập database khác.
 Admin role chỉ dùng để khởi tạo/quản trị. App không dùng admin credentials.
 Flyway chạy migration trong mỗi service khi khởi động; Hibernate chỉ validate và không tự tạo bảng.
-V1 là bảng metadata của khung; tạo bảng nghiệp vụ từ V2 trở đi.
+V1 là metadata; V2 tạo bảng domain/kỹ thuật và đã được áp dụng. Migration mới bắt đầu từ V3.
 Không sửa migration đã chạy, không tạo foreign key/JPA relation sang service khác.
+
+Compose local mặc định bật profile dev-seed và chạy repeatable R__demo_data.sql.
+Seed là dữ liệu giả, tài khoản INACTIVE/password disabled, không thể đăng nhập hay chuyển tiền.
+Các bảng token/idempotency/outbox để trống. Xem docs/database/INVENTORY.md để biết số dòng từng bảng.
+Nếu dùng database mới không cần demo, đặt SPRING_PROFILES_ACTIVE=default trong .env.
+Chạy IDE với .env cũ muốn demo: thêm SPRING_PROFILES_ACTIVE=dev-seed.
+Xem docs/database/DBEAVER.md trước khi chuyển profile trên volume đã seed.
 
 Init script chỉ chạy khi volume PostgreSQL trống. Đổi password trong .env sau khi đã tạo volume
 không đổi password trong database; cần cập nhật role bằng SQL hoặc dùng volume mới có chủ ý.
@@ -104,6 +112,8 @@ không đổi password trong database; cần cập nhật role bằng SQL hoặc
 
 `mvnw verify` chạy kiểm tra context/database health bằng H2 và kiểm tra Gateway routing/CORS.
 `scripts/smoke.ps1` kiểm tra routing qua các app thật; Docker dùng PostgreSQL + Flyway thật.
+`scripts/verify-db.ps1` kiểm tra 53 bảng, migration/seed, slot overlap, refund total,
+immutable ledger, wallet ownership, rating và default address; dữ liệu thử được rollback.
 GitHub Actions chạy cả Maven verify và Docker integration trên PR/main.
 Branch protection vẫn cần bật trong GitHub Settings; file CI không tự bật bảo vệ main.
 
@@ -111,6 +121,9 @@ Branch protection vẫn cần bật trong GitHub Settings; file CI không tự b
 - [Nội dung gửi người 2](docs/PERSON_2_HANDOFF.md)
 - [Quy trình Git](docs/GIT_WORKFLOW.md)
 - [Quy ước API](docs/api-contracts/README.md)
+- [Xem database bằng DBeaver](docs/database/DBEAVER.md)
+- [Các điểm cần sửa trên Class Diagram](docs/database/CLASS_DIAGRAM_SYNC.md)
+- [Danh sách bảng và dữ liệu demo](docs/database/INVENTORY.md)
 
 Chỉ có một Maven Wrapper ở root là chuẩn dùng chung. Wrapper cũ trong api-gateway
 được giữ lại để bảo toàn file sẵn có; không dùng wrapper đó cho build cả repo.
