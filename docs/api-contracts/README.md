@@ -5,7 +5,9 @@ Hiện chỉ system/info và actuator/health đã có code.
 Mỗi owner cập nhật contract của mình trong cùng PR triển khai API.
 
 - Prefix /api/v1/{service}/...; Gateway không strip prefix.
-- UUID cho ID tham chiếu service khác; không shared entity/JPA relation.
+- ID dùng Long/BIGINT tự tăng trong mỗi bảng, JSON là số (ví dụ id: 1, customerId: 2).
+  ID tham chiếu service khác giữ đúng ID do service sở hữu cấp; không shared entity/JPA relation.
+  Mobile mock đang dùng string: có thể chuẩn hóa String(id) ở adapter API hoặc cập nhật type khi tích hợp.
 - JSON camelCase. Date/time ISO-8601 có offset; lưu UTC; diễn giải lịch theo Asia/Ho_Chi_Minh.
 - VND: integer/Long, không float/double. Finance tính toán/ledger với kiểm tra overflow.
 - Thành công trả resource DTO; danh sách trả {items, page, size, total}.

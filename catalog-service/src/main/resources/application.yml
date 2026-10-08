@@ -17,6 +17,9 @@ spring:
       hibernate.jdbc.time_zone: UTC
   flyway:
     enabled: true
+  mvc:
+    problemdetails:
+      enabled: true
 management:
   endpoints:
     web:

@@ -56,14 +56,15 @@ class ApiGatewayApplicationTests {
     @Test
     void corsAllowsConfiguredWebOriginAndRejectsUnknownOrigin() throws Exception {
         var client = HttpClient.newHttpClient();
-        for (String origin : new String[]{"http://localhost:5173", "https://untrusted.example"}) {
+        for (String origin : new String[]{"http://localhost:5173", "http://localhost:5174",
+                "http://localhost:8086", "https://untrusted.example"}) {
             var response = client.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port
                     + "/api/v1/catalog/system/info"))
                     .header("Origin", origin).header("Access-Control-Request-Method", "GET")
                     .header("Access-Control-Request-Headers", "Idempotency-Key")
                     .method("OPTIONS", HttpRequest.BodyPublishers.noBody()).build(),
                     HttpResponse.BodyHandlers.ofString());
-            if (origin.contains("5173")) {
+            if (origin.startsWith("http://localhost:")) {
                 assertThat(response.statusCode()).isEqualTo(200);
                 assertThat(response.headers().firstValue("Access-Control-Allow-Origin")).contains(origin);
                 assertThat(response.headers().firstValue("Access-Control-Allow-Headers"))

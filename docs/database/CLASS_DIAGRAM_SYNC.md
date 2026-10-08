@@ -3,7 +3,7 @@
 Nguồn đọc: **ClassDiageamV3.png** ở root workspace. File ClassDiagramV4.png hiện chứa Use Case Diagram,
 nên không dùng làm nguồn class. Không sửa hình PNG/VPP gốc trong lần triển khai này.
 
-Đã tạo migration V2 riêng trong 5 service và seed local riêng bằng profile dev-seed.
+Đã tạo migration V2/V3 riêng trong 5 service và seed local riêng bằng profile dev-seed.
 Schema là bản triển khai ban đầu để hai người viết entity/API; không có nghĩa các method trong class đã được code.
 
 ## Ánh xạ các class hiện có
@@ -57,8 +57,10 @@ Các class kỹ thuật không bắt buộc nhét vào sơ đồ domain tổng q
 
 ## Thuộc tính và kiểu dữ liệu cần chỉnh
 
-1. **ID: Long → UUID.** Dùng UUID cho PK và các reference ID để khớp API contract và model Mobile string.
-   Không chuyển đổi dữ liệu Long cũ: database trước đây chỉ có metadata, chưa có dữ liệu nghiệp vụ.
+1. **ID giữ Long theo sơ đồ gốc.** Database hiện dùng BIGINT và primary ID tự tăng.
+   V3 chuyển dữ liệu UUID demo trước đây thành 1, 2, 3...; không cần sửa sơ đồ sang UUID.
+   Admin/Customer/Staff dùng chung ID User, không có bộ đếm riêng.
+   API trả ID dạng số; Mobile string ID cần adapter khi tích hợp API.
 2. **Tiền VND: Decimal → Long/BIGINT** cho giá, amount, balance, fee, tip, refund, reward, penalty.
    Rate/rating/score/hours vẫn Numeric. Promotion discountValue hiện là số nguyên
    (phần trăm nguyên hoặc số VND theo discountType); nếu cần phần trăm lẻ thì mở rộng bằng migration sau.
@@ -130,7 +132,11 @@ DBeaver ERD từng database chỉ hiện FK nội bộ; không có đường n�
 
 ## Migration và seed
 
-V1 giữ nguyên. V2 đã áp dụng: không sửa V2, thay đổi tiếp theo bắt đầu bằng V3 trong owning service.
+V1/V2 giữ nguyên; V3 đã áp dụng để chuyển ID sang Long/BIGINT. Thay đổi tiếp theo bắt đầu bằng V4.
+V3 chỉ tự ánh xạ các UUID thuộc bộ demo đã tạo. Nếu database khác có UUID ngoài bộ demo,
+V3 dừng transaction để yêu cầu mapping rõ ràng; không xóa hay đoán ID của dữ liệu đó.
+hold_token vẫn là token ngẫu nhiên UUID, không phải ID bản ghi hay trường cần đưa vào sơ đồ domain.
 Seed là repeatable R__demo_data.sql trong db/dev-seed, chỉ chạy khi bật profile dev-seed.
 INSERT ... ON CONFLICT DO NOTHING giữ nguyên dòng đã có, không reset hay ghi đè dữ liệu hiện tại.
+Seed đồng bộ sequence sau khi thêm ID explicit để bản ghi mới tự tăng không bị trùng ID.
 Các bảng refresh_tokens/idempotency_records/outbox_events được để trống đúng ý nghĩa.
