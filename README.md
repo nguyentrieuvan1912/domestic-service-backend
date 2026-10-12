@@ -2,7 +2,8 @@
 
 Backend monorepo cho nhóm 2 người. Mobile và Web giữ repo riêng.
 Nền tảng hiện tại có cấu hình chạy được, 53 bảng domain/kỹ thuật theo sơ đồ Class V3 và dữ liệu demo local.
-Chưa triển khai đăng nhập, CRUD, booking, thanh toán hay AI.
+Đã có API đọc Catalog (danh mục, tìm/lọc/phân trang, chi tiết dịch vụ) và tích hợp Web/Mobile.
+Chưa triển khai đăng nhập, Admin CRUD, booking, thanh toán hay AI.
 Endpoint system/info chỉ kiểm tra kết nối, không phải API nghiệp vụ.
 
 Java 21 · Spring Boot 4.1.1 · Spring Cloud 2025.1.3 · Maven Wrapper · PostgreSQL 17 · Docker Compose.
@@ -80,7 +81,8 @@ Nếu container service đang chạy, dừng container đó trước khi chạy 
 Postgres init tự tạo 5 database cùng 5 role riêng; role thường không có quyền truy cập database khác.
 Admin role chỉ dùng để khởi tạo/quản trị. App không dùng admin credentials.
 Flyway chạy migration trong mỗi service khi khởi động; Hibernate chỉ validate và không tự tạo bảng.
-V1 là metadata; V2 tạo bảng domain/kỹ thuật và đã được áp dụng. Migration mới bắt đầu từ V3.
+V1 là metadata; V2 tạo bảng domain/kỹ thuật; V3 đổi ID sang Long/BIGINT tự tăng.
+Các bản ghi demo dùng ID 1, 2, 3... theo bảng. Migration mới bắt đầu từ V4.
 Không sửa migration đã chạy, không tạo foreign key/JPA relation sang service khác.
 
 Compose local mặc định bật profile dev-seed và chạy repeatable R__demo_data.sql.
@@ -102,7 +104,11 @@ không đổi password trong database; cần cập nhật role bằng SQL hoặc
 - Error validation: HTTP 400, application/problem+json với title/detail/errors.
 - CORS ở Gateway, cấu hình CORS_ALLOWED_ORIGINS trong .env.
 - Expo mặc định dùng 8081, trùng Identity. Khi chạy Mobile cùng backend, dùng
-  `npx expo start --port 8086`; CORS mặc định cho Web 5173 và Expo Web 8086.
+  `npx expo start --port 8086`; CORS cho Web 5173/5174 và Expo Web 8086.
+  Web CleanMaster dùng 5174 để không trùng dự án khác. `.env` backend cũ cần thêm
+  `http://localhost:5174` vào CORS_ALLOWED_ORIGINS rồi `docker compose up -d api-gateway`.
+- Frontend gọi Gateway 8080: Web dùng VITE_API_BASE_URL, Mobile dùng EXPO_PUBLIC_API_BASE_URL.
+  Xem [hợp đồng Catalog](docs/api-contracts/catalog.md) về phạm vi đã nối và giới hạn local/network.
 - clients.*.base-url đã có sẵn trong mỗi service để viết HTTP client sau.
 - Chưa có xác thực/phân quyền JWT. Người 1 triển khai Identity và security trước khi cung cấp API thật.
 - Chưa cấu hình nhà cung cấp QR, API key AI, Redis, message broker hoặc CP-SAT.

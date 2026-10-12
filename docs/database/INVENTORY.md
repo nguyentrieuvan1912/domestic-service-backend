@@ -3,14 +3,14 @@
 Nguồn schema: ClassDiageamV3.png + model Mobile + nghiệp vụ QR/ví/AI đã chốt.
 Đã áp dụng vào PostgreSQL local ngày 2026-10-05.
 
-Có 53 bảng domain/kỹ thuật và 61 dòng demo; chưa tính service_schema_metadata và flyway_schema_history
+Có 53 bảng domain/kỹ thuật và 205 dòng demo sau seed UI Catalog; chưa tính service_schema_metadata và flyway_schema_history
 (2 bảng hạ tầng trong mỗi database). 47 bảng có demo; 6 bảng vận hành để trống có chủ ý.
 Không có dữ liệu người dùng/ngân hàng thật. Tài khoản demo không đăng nhập được.
 
 | Database | Bảng domain/kỹ thuật | Dòng demo |
 |---|---:|---:|
 | identity_db | 7 | 8 |
-| catalog_db | 8 | 8 |
+| catalog_db | 8 | 152 |
 | booking_db | 15 | 17 |
 | finance_db | 16 | 21 |
 | ai_db | 7 | 7 |
@@ -31,14 +31,20 @@ Không có dữ liệu người dùng/ngân hàng thật. Tài khoản demo khô
 
 | Bảng | Dòng demo |
 |---|---:|
-| service_categories | 1 |
-| services | 1 |
-| service_packages | 1 |
-| add_ons | 1 |
+| service_categories | 16 |
+| services | 20 |
+| service_packages | 39 |
+| add_ons | 73 |
 | service_requirements | 1 |
 | promotions | 1 |
 | promotion_services | 1 |
 | price_quotes | 1 |
+
+R__ui_catalog_data.sql bổ sung dữ liệu từ UI mẫu: 16 dịch vụ Mobile, 3 dịch vụ Web;
+service/package/add-on demo ID 1 vẫn giữ nguyên cho tham chiếu người 2. Seed local dev-seed
+insert-only, không thay schema và không ghi đè nội dung đã sửa. Add-on Web dùng giá mẫu tương
+ứng sofa/rèm/nệm/thảm của Mobile; cần xác nhận lại chính sách trước khi triển khai quote.
+Số dòng trên là baseline khi chưa thêm dữ liệu nghiệp vụ; không phải constraint số lượng.
 
 ## booking_db
 
@@ -94,8 +100,10 @@ Không có dữ liệu người dùng/ngân hàng thật. Tài khoản demo khô
 | idempotency_records | 0 |
 
 Refresh token, idempotency và outbox không được tạo giả: chỉ có dữ liệu khi triển khai luồng thật.
-ID demo cố định dùng chung giữa các database: user/customer/staff 10000000-..., Catalog 20000000-...,
-Booking 30000000-..., Finance 40000000-..., AI 50000000-.... ID là UUID hợp lệ; prefix chỉ để nhận diện fixture.
+ID hiện là BIGINT tự tăng. Demo: Admin/User 1, Customer/User 2, Staff/User 3;
+Category/Service/Package/AddOn đều có ID 1 trong bảng tương ứng; Booking 1, 2, 3;
+Payment 1, 2; WalletTransaction 1, 2, 3, 4. Reference ID xuyên service đã được cập nhật đồng bộ.
+ID chỉ duy nhất trong bảng/service sở hữu, không duy nhất trên toàn hệ thống.
 
 Demo gồm một booking hoàn thành, một booking hủy/hoàn tiền, một booking đã gán Staff;
 2 payment, 1 refund, 1 invoice, 1 earning, 1 withdrawal và 4 bút toán ví.

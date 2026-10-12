@@ -160,7 +160,7 @@ services:
       BOOKING_SERVICE_URL: http://booking-service:8080
       FINANCE_SERVICE_URL: http://finance-service:8080
       AI_SERVICE_URL: http://ai-assistant-service:8080
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8086}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:5174,http://localhost:8086}
     ports:
       - "127.0.0.1:8080:8080"
     restart: unless-stopped
