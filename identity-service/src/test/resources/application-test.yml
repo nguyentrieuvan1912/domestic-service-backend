@@ -9,3 +9,8 @@ spring:
   jpa:
     hibernate:
       ddl-auto: none
+identity:
+  bootstrap:
+    email: ''
+    phone: ''
+    password: ''

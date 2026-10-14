@@ -1,5 +1,24 @@
 # Xem PostgreSQL bằng DBeaver
 
+## Xuất sơ đồ database trực tiếp
+
+1. Kết nối đúng database, Refresh (F5) thư mục `Schemas → public → Tables` sau migration.
+2. Mở schema `public` → tab **ER Diagram** để xem toàn schema; hoặc chọn các bảng cần vẽ,
+   nhấp phải → **View Diagram**. Có thể bỏ hai bảng hạ tầng `flyway_schema_history`
+   và `service_schema_metadata` khỏi bản dùng cho báo cáo.
+3. Chọn **Arrange Diagram**, chỉnh vị trí và chọn ký pháp Crow's Foot nếu cần.
+4. Trên thanh công cụ sơ đồ chọn **Save diagram as…** → **PNG** để chèn Word/báo cáo.
+   Community hỗ trợ PNG/GIF/BMP/GraphML; SVG cần bản PRO theo tài liệu DBeaver hiện tại.
+5. Xuất riêng Identity, Catalog, Booking, Finance và AI để ảnh đọc được. `community_posts`
+   nằm trong Identity và có đường FK nối tới `users`.
+
+ERD được lấy từ bảng/khóa ngoại thật, nên không có phương thức của class. Backend dùng
+5 database riêng: DBeaver chỉ hiện FK vật lý trong từng database. Muốn một hình tổng quan
+toàn hệ thống, dùng draw.io/PlantUML và ghi rõ liên kết logic xuyên service; không tạo FK
+xuyên database chỉ để có đường nối trong ảnh.
+
+[Hướng dẫn ERD và xuất ảnh chính thức](https://dbeaver.com/docs/dbeaver/How-to-use-Diagrams/).
+
 PostgreSQL của backend chạy trong Docker trên máy, không dùng PostgreSQL dự án khác ở cổng 5432.
 Thông số lấy từ compose.yml và .env; nếu đã đổi .env thì dùng giá trị hiện tại của bạn.
 

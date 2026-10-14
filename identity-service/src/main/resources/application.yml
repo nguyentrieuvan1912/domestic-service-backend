@@ -1,6 +1,25 @@
 server:
   port: ${SERVER_PORT:8081}
+identity:
+  mail:
+    from: ${IDENTITY_MAIL_FROM:}
+  bootstrap:
+    email: ${IDENTITY_BOOTSTRAP_EMAIL:}
+    phone: ${IDENTITY_BOOTSTRAP_PHONE:}
+    password: ${IDENTITY_BOOTSTRAP_PASSWORD:}
 spring:
+  mail:
+    host: ${SMTP_HOST:}
+    port: ${SMTP_PORT:587}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${SMTP_AUTH:true}
+      mail.smtp.starttls.enable: ${SMTP_STARTTLS:true}
+      mail.smtp.starttls.required: ${SMTP_STARTTLS:true}
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 5000
+      mail.smtp.writetimeout: 5000
   application:
     name: identity-service
   config:
@@ -18,6 +37,9 @@ spring:
   flyway:
     enabled: true
 management:
+  health:
+    mail:
+      enabled: false
   endpoints:
     web:
       exposure:

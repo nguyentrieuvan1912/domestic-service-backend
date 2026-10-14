@@ -31,6 +31,16 @@ class CatalogReadApiTests {
         assertThat(json.readTree(response.body()).size()).isEqualTo(2);
         assertThat(response.body()).doesNotContain("HIDDEN");
     }
+    @Test void promotionsFilterAvailabilityAndExposeApplicableServices() throws Exception {
+        var response=get("/promotions");
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.body()).contains("CURRENT","UPCOMING").doesNotContain("EXPIRED","EXHAUSTED","HIDDEN");
+        var data=json.readTree(response.body());
+        assertThat(data.size()).isEqualTo(2);
+        assertThat(data.get(0).get("isActive").asBoolean()).isTrue();
+        assertThat(data.get(0).get("serviceIds").get(0).asLong()).isEqualTo(1);
+        assertThat(data.get(1).get("isActive").asBoolean()).isFalse();
+    }
 
     @Test void listIsPagedAndExcludesInactiveServicesAndParents() throws Exception {
         var first = json.readTree(get("/services?size=1").body());

@@ -1,7 +1,21 @@
 # Ghi chú đồng bộ sơ đồ Class với database
 
-Nguồn đọc: **ClassDiageamV3.png** ở root workspace. File ClassDiagramV4.png hiện chứa Use Case Diagram,
-nên không dùng làm nguồn class. Không sửa hình PNG/VPP gốc trong lần triển khai này.
+Nguồn mới nhất: **Diagram/SoDoUC/Class Diagram1.jpg** (13/10/2026), đối chiếu cùng
+**Diagram/ClassDiagramSimple/** để giữ các lớp chi tiết đã bổ sung. Nguồn nền ban đầu là
+ClassDiageamV3.png; ClassDiagramV4.png chứa Use Case Diagram nên không dùng làm nguồn class.
+Không sửa hình PNG/JPG/VPP gốc khi cập nhật database.
+
+Bản JPG mới thêm **CommunityPost**. Flyway Identity **V6__community_posts.sql** bổ sung
+`community_posts`: `id` BIGINT tự tăng, `user_id` FK đến `users.id`, `content` TEXT,
+`media_urls` JSONB array, `created_at`/`updated_at` TIMESTAMPTZ. `postId` trong UML ánh xạ
+với `id`; `mediaUrls: String` được chuẩn hóa thành mảng URL để lưu nhiều media.
+User có 0..* bài đăng, mỗi bài thuộc đúng một User. Không seed bài đăng hoặc tài khoản mới.
+Đây là schema lưu trữ; API và giao diện bài đăng chưa được triển khai trong lần cập nhật này.
+
+Giữ quy ước triển khai hiện tại: ID Long/BIGINT, tiền VND BIGINT, timestamp TIMESTAMPTZ,
+`readAt` thay cho hai cột `isRead`/`readAt`. Enum trong sơ đồ ánh xạ CHECK, không tạo
+bảng riêng cho từng enum; phương thức không chuyển thành bảng/cột. Các quan hệ xuyên
+service vẫn là liên kết nghiệp vụ, không tạo FK xuyên database.
 
 Đã tạo migration V2/V3 riêng trong 5 service và seed local riêng bằng profile dev-seed.
 Schema là bản triển khai ban đầu để hai người viết entity/API; không có nghĩa các method trong class đã được code.
@@ -12,6 +26,8 @@ Schema là bản triển khai ban đầu để hai người viết entity/API; k
 |---|---|---|
 | User, Admin, Customer, Staff | identity_db | users, admins, customers, staffs |
 | Address, Notification | identity_db | addresses, notifications |
+| CommunityPost | identity_db | community_posts |
+| StaffCandidate, RegistrationVerification | identity_db | staff_candidates, registration_verifications |
 | ServiceCategory, Service | catalog_db | service_categories, services |
 | ServicePackage, AddOn, ServiceRequirement, Promotion | catalog_db | service_packages, add_ons, service_requirements, promotions |
 | Booking, BookingAddOn, BookingRequirementAnswer | booking_db | bookings, booking_add_ons, booking_requirement_answers |
