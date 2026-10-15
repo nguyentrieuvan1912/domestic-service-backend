@@ -12,7 +12,7 @@ public class PublicStaffStatisticsController {
             WITH a AS (SELECT staff_id,count(*) FILTER(WHERE status='COMPLETED') AS completed FROM booking_assignments GROUP BY staff_id),
                  r AS (SELECT staff_id,count(*) AS reviews,avg(rating) AS rating FROM reviews WHERE moderation_status IN ('PUBLISHED','RESOLVED') GROUP BY staff_id),
                  p AS (SELECT DISTINCT staff_id FROM staff_service_capabilities WHERE status='APPROVED' UNION SELECT staff_id FROM a UNION SELECT staff_id FROM r)
-            SELECT p.staff_id AS "staffId",coalesce(a.completed,0) AS "completedBookingsCount",coalesce(r.reviews,0) AS "reviewCount",coalesce(r.rating,0) AS rating
+            SELECT p.staff_id AS "staffId",coalesce(a.completed,0) AS "completedBookingsCount",coalesce(r.reviews,0) AS "reviewCount",coalesce(r.rating,5) AS rating
             FROM p LEFT JOIN a ON a.staff_id=p.staff_id LEFT JOIN r ON r.staff_id=p.staff_id
             """
         );

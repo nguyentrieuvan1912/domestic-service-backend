@@ -27,7 +27,27 @@ Prefix Gateway: `/api/v1/{identity|catalog|booking|finance|ai-assistant}`. ID en
 
 Địa chỉ TP.HCM theo mô hình hai cấp gửi `ward` là tên đầy đủ chọn từ danh mục (ví dụ `Phường Sài Gòn`), `district` rỗng hoặc không gửi, `city="TP. Hồ Chí Minh"`. Identity kiểm tra ward thuộc danh mục trước lưu. V11 chỉ thêm dữ liệu tham chiếu chính thức, không đổi địa chỉ hiện có. Payload cũ có district vẫn được hỗ trợ để đọc/sửa tương thích. Khi sửa trên mobile, khách chủ động chọn lại ward mới; không suy ra ward mới từ quận cũ.
 
-Booking dùng ward làm địa bàn khi district rỗng; snapshot cũ có district giữ cách đối chiếu cũ. Tên cột staff_areas.district và các field district trong DTO lịch/cơ hội/ca làm được giữ tương thích, nhưng với địa chỉ hai cấp chúng chứa tên phường/xã/đặc khu. Staff mobile/Admin web lấy lựa chọn mới từ cùng danh mục Identity; địa bàn cũ đã lưu vẫn hiển thị để giữ các ca cũ. Không tự mở rộng một quận cũ thành các phường mới.
+Booking ưu tiên ward mới; snapshot lịch sử chỉ có district vẫn đọc được. Staff mobile/Admin web chỉ chọn phường/xã/đặc khu từ danh mục Identity. Booking kiểm tra tên theo danh mục trước khi lưu vào staff_areas.ward; DTO areaIds chứa tên đầy đủ, các field district trong lịch/cơ hội/ca làm giữ tên field để tương thích. V7 ngừng dùng địa bàn quận cũ cho ghép việc mới; không suy ra phường mới từ quận cũ, không đổi snapshot ca lịch sử. Ca đã nhận vẫn được bảo vệ thời gian thực hiện.
+
+### Đăng ký lịch tuần (15/10/2026)
+
+- GET `/api/v1/booking/staff/me/availability`: `saved.days` gồm 14 ngày từ thứ Hai tuần hiện tại, `saved.registeredWeekStarts` liệt kê tuần đã xác nhận; giữ revision, areaIds và matchNotifications.
+- PUT cùng endpoint: `{weekStart:"YYYY-MM-DD",days:[{date,intervals:[{startsAt,endsAt}]}],confirmedDates:["YYYY-MM-DD"],areaIds:["Phường Sài Gòn"],matchNotifications:true,revision:0}`. Gửi đủ 7 ngày của tuần hiện tại hoặc tuần kế tiếp. Người dùng chọn ca làm hoặc Nghỉ cho từng ngày còn lại; confirmedDates phải bao gồm đủ các ngày từ hôm nay trở đi trong tuần được lưu. Ngày đã xác nhận nghỉ có intervals rỗng. Xác nhận một lần cho cả tuần, không tự lặp lịch sang tuần mới.
+- Chỉ thay các ngày thuộc tuần đã gửi; giữ lịch tuần khác và phần thời gian đã qua. Server so sánh độ bao phủ trước thời điểm lưu, không tin giờ máy khách. Khoảng rảnh đang diễn ra có thể thay phần tương lai nếu giữ nguyên phần đã qua. 08:00–20:00, bước 30 phút; toàn bộ ca đã nhận phải còn được bao phủ, kể cả khi hai khoảng liền nhau.
+- 400: tuần/ngày/giờ/khu vực không hợp lệ; 409: revision cũ, sửa thời gian quá khứ hoặc làm mất khoảng rảnh/phường mới của ca đã nhận. Không commit một phần khi lỗi.
+- Đăng ký lịch tuần là điều kiện đầu tiên trong eligibility dùng chung cho tìm nhân viên theo giờ khách đặt, tạo Mode A, matching và claim. Tuần chưa có bản ghi staff_schedule_weeks trả duy nhất SCHEDULE_REQUIRED, không xét tiếp các điều kiện khác. Sau đăng ký vẫn phải đủ năng lực, khu vực, trực tuyến, khoảng rảnh bao phủ ca và không trùng lịch. Đăng ký nghỉ cả tuần không tạo giờ rảnh để nhận đơn.
+- Mobile hiển thị nhắc đăng ký các ngày còn lại khi Staff vào app hoặc quay lại app. Lưu đủ tuần thì không nhắc; sang tuần mới chưa đăng ký thì nhắc lại. Trên màn đăng ký không hiện modal nhắc để tránh cản thao tác.
+
+### Khách chọn nhân viên và thời gian đặt trước (15/10/2026)
+
+- Tìm nhân viên và POST bookings yêu cầu giờ bắt đầu cách thời điểm server hiện tại ít nhất 2 giờ. Giữ cửa sổ hôm nay + 6 ngày, 08:00–20:00 và bước 30 phút; toàn bộ thời lượng, kể cả add-on/dịch vụ kèm theo, phải hợp lệ. Kiểm tra lại trước khi ghi đơn. Không áp quy tắc 2 giờ cho Staff nhận một đơn đã được tạo trước đó; Staff vẫn phải nhận trước giờ bắt đầu.
+- GET `/api/v1/booking/customer/staff?addressId=...&startsAt=...&durationMinutes=120`: serviceId là tùy chọn. Bỏ serviceId để trả tất cả nhân viên khả dụng có ít nhất một dịch vụ đang hoạt động và năng lực APPROVED còn hiệu lực. Nếu gửi serviceId thì chỉ trả nhân viên phù hợp dịch vụ đó. durationMinutes từ 30–720, chia hết cho 30; địa chỉ phải thuộc khách đăng nhập.
+- Mỗi nhân viên khả dụng có `availableUntil` (ISO instant) và `availableUntilReason` (`SCHEDULE_END`, `OPERATING_HOURS`, `NEXT_BOOKING`). Giới hạn lấy từ khoảng rảnh đã lưu chứa giờ bắt đầu, tối đa 20:00 và trừ 60 phút di chuyển trước ca tiếp theo. Mobile dùng để giải thích popup khi tổng thời lượng tăng do đổi gói/thêm dịch vụ; backend vẫn kiểm tra lại đầy đủ trước khi tạo/nhận đơn.
+- Điểm sao nhân viên trên kết quả tìm kiếm, hồ sơ công khai và snapshot khi nhận ca mặc định là 5 nếu chưa có đánh giá công bố; `reviewCount` vẫn bằng 0. Khi có đánh giá PUBLISHED/RESOLVED, dùng trung bình thực tế, không cộng thêm một đánh giá 5 sao mặc định vào phép tính. Thống kê quản trị theo kỳ giữ giá trị trung bình dữ liệu thực tế để không thay đổi điều kiện thưởng.
+- Mỗi nhân viên trả thêm `eligibleServices:[{id,name}]`, competencies là tên dịch vụ phù hợp tại thời gian đang tìm, cùng rating/reviewCount/completedBookingsCount từ dữ liệu Booking. Không trả năng lực chưa duyệt, hết hạn hoặc dịch vụ đang bị hạn chế.
+- Lịch tuần đã xác nhận, giờ rảnh bao phủ toàn bộ khoảng yêu cầu, phường/xã, trạng thái nhân viên, năng lực, hạn chế và xung đột/đệm di chuyển đều kiểm tra từ DB. Giữ đệm 60 phút giữa ca như chính sách hiện hành; không giả lập khoảng cách hoặc ETA.
+- Mobile ban đầu hiển thị toàn bộ kết quả; các checkbox dịch vụ được gom từ eligibleServices, chọn nhiều dịch vụ nghĩa là nhân viên làm được ít nhất một dịch vụ đã chọn. Bộ lọc sao/tuổi vẫn dùng cùng danh sách. Khách chọn dịch vụ cụ thể từ năng lực nhân viên, rồi chọn gói; thay thời lượng sẽ kiểm tra lại.
+- Mode A khóa cùng staff_schedule_settings với luồng lưu lịch/claim rồi xét lại điều kiện trước INSERT. Lời mời ASSIGNED giữ khung giờ, ngăn hai khách đồng thời đặt cùng nhân viên; lỗi cạnh tranh trả 409, không tạo đơn/phân công giả thành công. Idempotent requestKey tiếp tục trả đơn đã lưu. Nhân viên vẫn phải tự xác nhận lời mời.
 
 ## Catalog
 
@@ -42,6 +62,8 @@ Booking dùng ward làm địa bàn khi district rỗng; snapshot cũ có distri
 | POST /quotes/{id}/consume | CUSTOMER sở hữu hoặc ADMIN | Đối chiếu booking đã commit; tăng lượt promo một lần |
 
 Quote request gồm serviceId, packageId, requiredStaffCount, quantity (ITEM), addOnIds, relatedServiceIds, promotionCode, answers, configuration và requestKey khi lưu. `answers` dùng đúng fieldKey của Catalog; hỗ trợ TEXT, NUMBER, SELECT, MULTI_SELECT, BOOLEAN, DATE. Configuration giữ thông số của form cũ với nhãn hiển thị; không thay thế các câu trả lời bắt buộc. ID gói/add-on phải thuộc dịch vụ.
+
+Promotion public trả `serviceIds` (rỗng = tất cả dịch vụ chính), mức đơn tối thiểu, mức giảm/trần giảm, thời gian hiệu lực và lượt dùng. `usageLimit: null` là không giới hạn; API quản trị cũng nhận null để bảo toàn điều kiện này khi tạo/sửa. Phạm vi xét theo dịch vụ chính; phần giảm được tính trên tổng gói và mục thêm. Mobile chỉ hiển thị đã áp dụng sau khi quote-preview thành công, mã bị từ chối không làm mất báo giá cơ bản. Khi quay lại wizard, các trường của bước sau đích đến bị xóa; bản ghi đơn đã gửi vẫn được giữ và không bị tự hủy.
 
 Giá hiện tại: giá gói × số lượng ITEM × ceil(số Staff / Staff mặc định của gói), cộng hạng mục bổ sung rồi trừ promo hợp lệ. Thời lượng tính từ gói/số lượng/add-on và làm tròn 30 phút. Đây là quy tắc ban đầu cần kiểm tra lại từng dịch vụ, không phải mức lương theo cấp bậc.
 
@@ -111,3 +133,33 @@ AI có GET/POST `/conversations`, GET/POST `/conversations/{id}/messages`, DELET
 - Chính sách hủy/hoàn, lương theo cấp bậc, giá riêng từng loại thiết bị và trọng số recommendation/CP-SAT còn cần xác nhận. Không suy ra các mức phí/giảm giá bằng thông báo thành công trên client.
 - Đăng ký Gmail và gửi mail thật dùng cấu hình SMTP hiện có; cần kiểm tra lại Gmail nhận OTP khi kiểm thử người dùng.
 - Báo cáo/checklist tổng hợp nằm ở `E:/KhoaLuanTN/outputs/api-v5-integration/`.
+
+
+## Mode A: thời hạn phản hồi lời mời (Booking V8)
+
+- Sau khi xác nhận giá, Booking lưu `staffResponseDeadline` (3 phút), `staffWaitState=WAITING`, `staffWaitRound=1`; `serverNow` dùng để đồng bộ đồng hồ client. Snapshot nhân viên được lưu ngay khi mời.
+- Worker kiểm tra thời hạn mỗi giây; khóa cùng booking với thao tác nhận đơn. Lời mời hết hạn không thể claim, kể cả trước lượt chạy worker. Booking/assignment chuyển `CANCELLED` với lý do `Hết thời gian nhận đơn`, `staffWaitState=EXPIRED`. Cả hai bên nhận thông báo qua outbox Identity.
+- Customer `POST /api/v1/booking/bookings/{id}/staff-response` body `{ "action": "EXTEND" | "CANCEL" | "STOP", "round": 1 }`. Chỉ chủ đơn được thao tác trên lượt hết hạn. `EXTEND` kiểm tra lại điều kiện/lịch của nhân viên, tạo assignment mới, tăng lượt và thời hạn thêm 3 phút từ lúc xác nhận; vết hủy assignment/lịch sử trước được giữ. Gửi lại cùng lượt không tạo lời mời trùng. `CANCEL` đóng lựa chọn tìm nhân viên khác và giữ đơn hủy trong quản lý đơn. `STOP` đóng lựa chọn với lý do khách hủy đặt, không tiếp tục, rồi client về trang chủ. Cả hai thao tác chỉ điều hướng sau khi server xác nhận lưu. Mobile tìm lại bằng ID đơn sở hữu: tải lại địa chỉ, thời gian, gói, addon, cấu hình, câu trả lời, ghi chú và mã giảm giá từ snapshot; mở thẳng danh sách nhân viên, đánh dấu/khóa chọn người vừa hết hạn. Báo giá, lịch rảnh và điều kiện mã được kiểm tra lại, không dùng lại quote hay request key của đơn cũ. Đơn đã được nhận không thể hủy qua endpoint này.
+- `staffWaitState=CLOSED` khi nhân viên nhận, khách chọn không chờ hoặc đã qua giờ làm. Client chỉ hiện thẻ chờ với Mode A `STAFF_ASSIGNED/WAITING` hoặc `CANCELLED/EXPIRED`. Nhấn thẻ mở `/booking/waiting?id=...`; quay về không đặt lại đồng hồ.
+- Staff assignments bao gồm lời mời hết hạn chưa từng nhận, trả thêm `cancellationReason`, `responseTimedOut`. Chỉ lịch sử/thông tin cần thiết, không coi lời mời hết hạn là thu nhập đã phát sinh. Web quản lý đơn đọc trạng thái/lý do và lịch sử từ API đang có.
+
+
+## Mode A: giới hạn tổng thời lượng 4 giờ
+
+Tạo đơn chọn nhân viên yêu thích giới hạn tổng thời gian gói chính + add-on + dịch vụ liên quan (đã làm tròn theo báo giá) tối đa 240 phút. Gói chính đủ 4 giờ không được thêm addon, kể cả addon 0 phút. Booking kiểm tra báo giá Catalog trước khi ghi booking, assignment hoặc dùng mã giảm giá; yêu cầu sai trả HTTP 400. Mode B giữ chính sách hiện tại. Mobile thông báo ngay khi chọn vượt giới hạn: giữ gói chính không thêm addon, hoặc đổi sang gói thấp hơn đủ thời gian rồi thêm mục vừa chọn. Không tạo gói giả nếu Catalog không có gói phù hợp; giới hạn lịch rảnh của nhân viên vẫn được kiểm tra.
+
+
+## Staff: chi tiết đơn trước khi nhận và phân luồng Mode A/B
+
+`GET /api/v1/booking/staff/opportunities/{id}` chỉ STAFF đang đủ điều kiện nhận ca mở; Mode A phải có lời mời ASSIGNED dành cho chính tài khoản đó. Đơn đã đóng/hết hạn/không đủ điều kiện trả 409, lời mời của người khác trả 404. Endpoint trả thêm `address` đầy đủ từ snapshot địa chỉ khách đã xác nhận, `notes`, `workSelections[{label,value}]`, `addOnsText`, `relatedServicesText`, `paymentMethod`, `paymentStatus`, `totalCustomerPaid`, `city`. Không mở số điện thoại khách trước khi nhận. Danh sách matching vẫn không gửi địa chỉ chi tiết/ghi chú/cấu hình riêng; chỉ bổ sung tổng tiền, thanh toán, tên addon/dịch vụ thêm và thành phố. Assignment trả cùng dữ liệu công việc/thanh toán từ snapshot sau khi nhận; địa chỉ có fallback ghép đường, phường/xã và tỉnh/thành khi bản ghi cũ thiếu fullAddress.
+
+Mobile tách Khách chọn bạn (Mode A, đếm lời mời của chính Staff, kể cả đang cần bật online/khôi phục điều kiện) và Tìm việc (Mode B còn phù hợp). Nút Mode A đỏ và nhấp nháy chậm khi số lời mời >0, tôn trọng giảm chuyển động; không đánh dấu đọc/xóa notification chuông. Poll matching đang có vẫn mỗi 5 giây, không tạo poll mới cho từng nút. Chi tiết ca dùng API thật; nhận trực tiếp qua claim, giữ kiểm tra điều kiện ở server và chuyển sang tiến trình ca sau khi ghi assignment thành công. Tiền mặt không yêu cầu chờ thanh toán trước khi di chuyển/làm việc; hoàn tất không tự ghi có thu nhập trước quyết toán.
+
+
+## Chat sau khi nhận ca và thông báo tin mới
+
+Claim tạo conversation cùng transaction với assignment. Mobile làm mới hội thoại ngay sau claim, cho phép hai bên nhắn ở ca CONFIRMED/đang thực hiện và cho Staff đã nhận một vị trí khi đơn nhóm vẫn MATCHING. Hộp thư và các nút chat đang mount chia sẻ một polling theo phiên đăng nhập (4 giây, tạm ngừng nền); tab khách Tin nhắn hiển thị tổng unreadCountCustomer từ database. Mở hộp thư không tự đọc các cuộc trò chuyện khác; chỉ màn hình hội thoại đang focus mới tải/đánh dấu tin đã xem. Cache tài khoản và phản hồi cũ được chặn khi đổi tài khoản hoặc đã có read receipt mới.
+
+Gửi TEXT tạo message và outbox CHAT_MESSAGE cùng transaction; lặp clientKey không thêm message/notification. Worker Identity chỉ gửi cho người nhận với eventKey chat-message:{messageId}, type CHAT_MESSAGE, data {bookingId,conversationId,messageId}. Không gửi nội dung chat riêng trong preview chuông. Mobile nhấn thông báo mở đúng /chat/[id]; server vẫn kiểm tra thành viên hội thoại. Chưa có push OS, luồng này là hộp thư/chuông trong ứng dụng đang chạy.
+
+PATCH /conversations/{id}/read nhận body tùy chọn {throughMessageId:<id tin lớn nhất đã tải>} và trả {changed,unreadCount}. Giới hạn này giữ tin đến sau lần tải ở trạng thái chưa đọc. Client cũ không gửi body giữ hành vi đọc toàn bộ. Tin đã gửi của mình không cộng vào badge. Danh sách conversations gom lastMessage và hai bộ đếm trong một truy vấn SQL, không gọi thêm ba truy vấn cho từng hội thoại.

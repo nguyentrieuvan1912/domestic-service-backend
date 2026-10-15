@@ -106,11 +106,11 @@ public class CatalogAdminService {
         try {start=java.time.LocalDate.parse(text(body,"validFrom",10,true)).atStartOfDay().atOffset(java.time.ZoneOffset.ofHours(7));end=java.time.LocalDate.parse(text(body,"validTo",10,true)).plusDays(1).atStartOfDay().atOffset(java.time.ZoneOffset.ofHours(7));}catch(java.time.DateTimeException ex){throw bad("Ngày ưu đãi không hợp lệ.");}
         if(!end.isAfter(start))throw bad("Ngày kết thúc phải sau ngày bắt đầu.");
         String type=text(body,"discountType",20,true);if(!List.of("PERCENT","FIXED").contains(type))throw bad("Loại giảm giá không hợp lệ.");
-        long value=number(body,"discountValue",0,0,type.equals("PERCENT")?100:1000000000),limit=number(body,"usageLimit",0,1,Integer.MAX_VALUE);
+        long value=number(body,"discountValue",0,0,type.equals("PERCENT")?100:1000000000);Long limit=body.get("usageLimit")==null?null:number(body,"usageLimit",0,1,Integer.MAX_VALUE);
         Object max=body.get("maxDiscount")==null?null:number(body,"maxDiscount",0,0,1000000000);
         String state="DISABLED".equals(body.get("status"))?"INACTIVE":"ACTIVE";
         if(id==null)id=insert("INSERT INTO promotions(promotion_code,promotion_name,description,start_at,end_at,discount_type,discount_value,max_discount_amount,minimum_booking_amount,usage_limit,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)",code,Objects.toString(body.get("name"),code),description,start,end,type.equals("PERCENT")?"PERCENTAGE":"FIXED_AMOUNT",value,max,number(body,"minimumBookingAmount",0,0,1000000000),limit,state);
-        else {exists("promotions",id);int used=db.queryForObject("SELECT used_count FROM promotions WHERE id=? FOR UPDATE",Integer.class,id);if(limit<used)throw bad("Giới hạn không được nhỏ hơn số lượt đã dùng.");db.update("UPDATE promotions SET promotion_code=?,description=?,start_at=?,end_at=?,discount_type=?,discount_value=?,max_discount_amount=?,usage_limit=?,status=? WHERE id=?",code,description,start,end,type.equals("PERCENT")?"PERCENTAGE":"FIXED_AMOUNT",value,max,limit,state,id);}
+        else {exists("promotions",id);int used=db.queryForObject("SELECT used_count FROM promotions WHERE id=? FOR UPDATE",Integer.class,id);if(limit!=null&&limit<used)throw bad("Giới hạn không được nhỏ hơn số lượt đã dùng.");db.update("UPDATE promotions SET promotion_code=?,description=?,start_at=?,end_at=?,discount_type=?,discount_value=?,max_discount_amount=?,usage_limit=?,status=? WHERE id=?",code,description,start,end,type.equals("PERCENT")?"PERCENTAGE":"FIXED_AMOUNT",value,max,limit,state,id);}
         return Map.of("id",id);
     }
 }

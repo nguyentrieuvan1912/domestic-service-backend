@@ -94,7 +94,7 @@ class AccountApiTests {
     long candidate() throws Exception {
         var body=new LinkedHashMap<String,Object>();
         body.put("fullName","Ứng viên thử nghiệm");body.put("phone","0900000003");body.put("email","staff@test.invalid");
-        body.put("cccd","012345678901");body.put("birthYear",1998);body.put("gender","Nữ");body.put("area","Quận 1");
+        body.put("cccd","012345678901");body.put("birthYear",1998);body.put("dateOfBirth","1998-06-18");body.put("experienceYears",3);body.put("gender","Nữ");body.put("area","Quận 1");
         body.put("source","Website");body.put("services",List.of("Dọn dẹp"));body.put("note","Đăng ký thử");
         body.put("status","EVALUATION");body.put("staffId",999);
         var response=request("POST","/admin/candidates",body,admin);
@@ -147,6 +147,10 @@ class AccountApiTests {
         assertThat(db.queryForObject("SELECT count(*) FROM staffs",Integer.class)).isEqualTo(1);
         String staff=token(request("POST","/auth/login",Map.of("identifier","staff@test.invalid","password","StaffTest!123"),null));
         assertThat(request("GET","/auth/profile",null,staff).body()).contains("Ứng viên thử nghiệm","STAFF");
+        assertThat(request("GET","/auth/profile",null,staff).body()).contains("1998-06-18","staff-avatar.png");
+        assertThat(db.queryForObject("SELECT birth_year FROM staffs",Integer.class)).isEqualTo(1998);
+        assertThat(db.queryForObject("SELECT experience_years FROM staffs",Integer.class)).isEqualTo(3);
+        assertThat(request("GET","/staff-directory",null,null).body()).contains("1998-06-18","staff-avatar.png");
         assertThat(request("PATCH","/customer/profile",Map.of("fullName","Không được sửa","phone","0900000003"),staff).statusCode()).isEqualTo(403);
         assertThat(request("PATCH","/staff/profile",Map.of("phone","0900000003","bio","Thông tin lưu thật"),staff).statusCode()).isEqualTo(200);
         assertThat(request("GET","/auth/profile",null,staff).body()).contains("Thông tin lưu thật");

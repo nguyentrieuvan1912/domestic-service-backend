@@ -125,7 +125,7 @@ public class AccountService {
     public Map<String,Object> profile(User user) {
         return db.queryForObject("""
             SELECT u.avatar_url,u.created_at,c.gender customer_gender,c.date_of_birth customer_dob,
-                   c.total_bookings,c.reward_points,s.gender staff_gender,s.date_of_birth staff_dob,
+                   c.total_bookings,c.reward_points,s.gender staff_gender,s.date_of_birth staff_dob,s.birth_year,
                    s.identity_number,s.profile_description,s.experience_years,s.average_rating,s.approved_at,
                    s.total_reviews,s.completion_rate,s.satisfaction_rate,s.status staff_status,s.is_online,
                    (SELECT count(*) FROM addresses a WHERE a.customer_id=u.id) address_count,
@@ -137,10 +137,10 @@ public class AccountService {
                 result.put("email",user.email()); result.put("role",user.role()); result.put("status",user.status());
                 result.put("avatar",Objects.toString(rs.getString("avatar_url"),"")); result.put("createdAt",rs.getTimestamp("created_at").toInstant().toString());
                 result.put("gender",rs.getString(user.role().equals("CUSTOMER")?"customer_gender":"staff_gender"));
-                var dob=rs.getDate(user.role().equals("CUSTOMER")?"customer_dob":"staff_dob"); result.put("dateOfBirth",dob==null?null:dob.toString());
+                var dob=rs.getDate(user.role().equals("CUSTOMER")?"customer_dob":"staff_dob"); result.put("dateOfBirth",dob==null?null:dob.toString());result.put("birthYear",rs.getObject("birth_year"));
                 result.put("totalBookings",rs.getInt("total_bookings")); result.put("rewardPoints",rs.getLong("reward_points"));
                 result.put("isVerified",rs.getTimestamp("approved_at")!=null); result.put("identityCard",rs.getString("identity_number")); result.put("bio",rs.getString("profile_description"));
-                result.put("experienceYears",rs.getBigDecimal("experience_years")); result.put("rating",rs.getBigDecimal("average_rating"));
+                result.put("experienceYears",rs.getBigDecimal("experience_years")); result.put("rating",rs.getInt("total_reviews")==0 ? java.math.BigDecimal.valueOf(5) : rs.getBigDecimal("average_rating"));
                 result.put("reviewCount",rs.getInt("total_reviews")); result.put("completionRate",rs.getBigDecimal("completion_rate"));
                 result.put("satisfactionRate",rs.getBigDecimal("satisfaction_rate")); result.put("staffStatus",rs.getString("staff_status")); result.put("isOnline",rs.getBoolean("is_online"));
                 result.put("addressCount",rs.getInt("address_count")); result.put("defaultAddress",rs.getString("default_address"));
@@ -162,13 +162,17 @@ public class AccountService {
         return profile(user(current.id()));
     }
     public List<Map<String,Object>> publicStaff() {
-        return db.queryForList("SELECT u.id,u.full_name AS \"fullName\",u.avatar_url AS avatar,u.created_at AS \"createdAt\",s.gender,s.date_of_birth AS \"dateOfBirth\",s.experience_years AS \"experienceYears\",s.average_rating AS rating,s.total_reviews AS \"reviewCount\",s.profile_description AS bio,s.status,s.is_online AS \"isOnline\",(s.approved_at IS NOT NULL) AS \"isVerified\" FROM users u JOIN staffs s ON s.id=u.id WHERE u.status='ACTIVE' AND s.approved_at IS NOT NULL ORDER BY u.id");
+        return db.query("SELECT u.id,u.full_name,u.avatar_url,u.created_at,s.gender,s.date_of_birth,s.birth_year,s.experience_years,s.average_rating,s.total_reviews,s.profile_description,s.status,s.is_online,s.approved_at FROM users u JOIN staffs s ON s.id=u.id WHERE u.status='ACTIVE' AND s.approved_at IS NOT NULL ORDER BY u.id",(rs,n)->{
+            Map<String,Object> item=new LinkedHashMap<>();item.put("id",rs.getLong("id"));item.put("fullName",rs.getString("full_name"));item.put("avatar",rs.getString("avatar_url"));item.put("createdAt",rs.getTimestamp("created_at").toInstant().toString());item.put("gender",rs.getString("gender"));
+            var date=rs.getDate("date_of_birth");item.put("dateOfBirth",date==null?null:date.toLocalDate().toString());item.put("birthYear",rs.getObject("birth_year"));item.put("experienceYears",rs.getBigDecimal("experience_years"));item.put("rating",rs.getInt("total_reviews")==0 ? java.math.BigDecimal.valueOf(5) : rs.getBigDecimal("average_rating"));item.put("reviewCount",rs.getInt("total_reviews"));item.put("bio",rs.getString("profile_description"));item.put("status",rs.getString("status"));item.put("isOnline",rs.getBoolean("is_online"));item.put("isVerified",rs.getTimestamp("approved_at")!=null);return item;
+        });
     }
     public Map<String,Object> createStaff(User admin,StaffCreate body) {
         if(!"ADMIN".equals(admin.role()))throw error(HttpStatus.FORBIDDEN,"Chỉ Admin được cấp tài khoản nhân viên.");
         long id=createUser(body.fullName(),body.phone(),body.email(),body.password(),"STAFF");
         try{db.update("INSERT INTO staffs(id,identity_number,account_rank,approved_at,approved_by) VALUES (?,?,?,now(),?)",id,body.identityCard().strip(),body.rank(),admin.id());}
         catch(DataIntegrityViolationException ex){throw error(HttpStatus.CONFLICT,"Thông tin nhân viên đã được sử dụng.");}
+        saveStaffDetails(id,body.dateOfBirth(),body.birthYear(),body.gender(),body.experienceYears(),body.bio());
         return profile(user(id));
     }
     public Map<String,Object> staffOnline(User user,boolean online) {
@@ -230,10 +234,14 @@ public class AccountService {
                 || !text(input,"email",254,true).matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]+")) throw error(HttpStatus.BAD_REQUEST,"Số điện thoại, email hoặc CCCD không hợp lệ.");
         if (!List.of("Nam","Nữ","Khác").contains(data.get("gender")) || !List.of("Website","Google Forms","Zalo","Walk-in").contains(data.get("source")))
             throw error(HttpStatus.BAD_REQUEST,"Giới tính hoặc nguồn ứng viên không hợp lệ.");
-        Object year=input.get("birthYear");
+        var fullBirth=staffBirthDate(Objects.toString(input.get("dateOfBirth"),""));
+        Object year=fullBirth==null?input.get("birthYear"):fullBirth.getYear();
+        if(fullBirth!=null)data.put("dateOfBirth",fullBirth.toString());
         if (!(year instanceof Number number) || number.doubleValue()!=number.intValue() || number.intValue()<1940 || number.intValue()>java.time.Year.now().getValue()-18)
             throw error(HttpStatus.BAD_REQUEST,"Ứng viên phải từ 18 tuổi; kiểm tra năm sinh.");
-        data.put("birthYear",year); var services=strings(input,"services");
+        data.put("birthYear",year);
+        Object experience=input.get("experienceYears");if(experience instanceof Number n&&Double.isFinite(n.doubleValue())&&n.doubleValue()>=0&&n.doubleValue()<=80)data.put("experienceYears",n);
+        var services=strings(input,"services");
         if (services.isEmpty()) throw error(HttpStatus.BAD_REQUEST,"Vui lòng chọn dịch vụ mong muốn.");
         data.put("services",services); data.put("status","PENDING"); data.put("subStatus","Chờ duyệt");
         long id=insert("INSERT INTO staff_candidates(payload) VALUES (?)",json.writeValueAsString(data));
@@ -280,16 +288,17 @@ public class AccountService {
                 """,staffId,data.get("cccd"),switch((String)data.get("gender")){case "Nam"->"MALE";case "Nữ"->"FEMALE";default->"OTHER";},
                 data.get("note"),adminId,request.rank());
         } catch (DataIntegrityViolationException ex) { throw error(HttpStatus.CONFLICT,"CCCD đã thuộc về nhân viên khác."); }
+        saveStaffDetails(staffId,Objects.toString(data.get("dateOfBirth"),""),data.get("birthYear") instanceof Number n?n.intValue():null,null,data.get("experienceYears") instanceof Number n?n.doubleValue():null,null);
         data.put("staffId",staffId); data.put("rank",request.rank()); data.put("subStatus","Đã chuyển thành nhân viên chính thức");
         saveCandidate(id,data); db.update("UPDATE staff_candidates SET staff_id=? WHERE id=?",staffId,id); return data;
     }
     public List<Map<String,Object>> staff() {
-        return db.query("SELECT u.*,s.identity_number,s.average_rating,s.account_rank FROM users u JOIN staffs s ON s.id=u.id ORDER BY u.id DESC",(rs,n)->{
+        return db.query("SELECT u.*,s.identity_number,s.average_rating,s.total_reviews,s.account_rank,s.date_of_birth,s.birth_year,s.gender,s.experience_years,s.profile_description FROM users u JOIN staffs s ON s.id=u.id ORDER BY u.id DESC",(rs,n)->{
             Map<String,Object> item=new LinkedHashMap<>();
             item.put("id",rs.getLong("id")); item.put("fullName",rs.getString("full_name")); item.put("phone",rs.getString("phone"));
             item.put("identityCard",rs.getString("identity_number")); item.put("status",rs.getString("status")); item.put("statusNote",rs.getString("status_note"));
             item.put("rank",rs.getString("account_rank")); item.put("joinDate",rs.getTimestamp("created_at").toInstant().toString());
-            item.put("averageRating",rs.getBigDecimal("average_rating")); return item;
+            item.put("averageRating",rs.getInt("total_reviews")==0 ? java.math.BigDecimal.valueOf(5) : rs.getBigDecimal("average_rating"));item.put("dateOfBirth",rs.getDate("date_of_birth")==null?null:rs.getDate("date_of_birth").toString());item.put("birthYear",rs.getObject("birth_year"));item.put("gender",rs.getString("gender"));item.put("experienceYears",rs.getBigDecimal("experience_years"));item.put("bio",rs.getString("profile_description"));item.put("avatar",rs.getString("avatar_url"));item.put("email",rs.getString("email"));return item;
         });
     }
     public void updateStaff(long id, StaffUpdate request) {
@@ -297,5 +306,22 @@ public class AccountService {
         try { db.update("UPDATE users SET full_name=?,phone=? WHERE id=?",request.fullName().strip(),normalizePhone(request.phone()),id); }
         catch (DataIntegrityViolationException ex) { throw error(HttpStatus.CONFLICT,"Số điện thoại đã được sử dụng."); }
         db.update("UPDATE staffs SET account_rank=? WHERE id=?",request.rank(),id);
+        saveStaffDetails(id,request.dateOfBirth(),request.birthYear(),request.gender(),request.experienceYears(),request.bio());
     }
+    static java.time.LocalDate staffBirthDate(String raw){
+        if(raw==null||raw.isBlank())return null;
+        try{var date=java.time.LocalDate.parse(raw);var today=java.time.LocalDate.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh"));if(date.getYear()<1940||date.isAfter(today.minusYears(18)))throw error(HttpStatus.BAD_REQUEST,"Nhân viên phải đủ 18 tuổi; kiểm tra ngày sinh.");return date;}
+        catch(java.time.DateTimeException ex){throw error(HttpStatus.BAD_REQUEST,"Ngày sinh không hợp lệ.");}
+    }
+    private void saveStaffDetails(long id,String raw,Integer year,String gender,Double experience,String bio){
+        var dob=staffBirthDate(raw);if(dob!=null)year=dob.getYear();
+        if(year!=null&&(year<1940||year>java.time.Year.now().getValue()-18))throw error(HttpStatus.BAD_REQUEST,"Năm sinh nhân viên không hợp lệ.");
+        if(dob!=null)db.update("UPDATE staffs SET date_of_birth=?,birth_year=? WHERE id=?",dob,year,id);
+        else if(year!=null)db.update("UPDATE staffs SET birth_year=? WHERE id=?",year,id);
+        if(gender!=null)db.update("UPDATE staffs SET gender=? WHERE id=?",gender,id);
+        if(experience!=null)db.update("UPDATE staffs SET experience_years=? WHERE id=?",experience,id);
+        if(bio!=null)db.update("UPDATE staffs SET profile_description=? WHERE id=?",bio.strip(),id);
+        db.update("UPDATE users SET avatar_url='/api/v1/identity/staff-avatar.png' WHERE id=? AND coalesce(btrim(avatar_url),'')=''",id);
+    }
+
 }

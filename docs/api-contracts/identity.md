@@ -95,3 +95,11 @@ Identity V5 thêm registration_verifications. Chỉ lưu BCrypt hash của mã v
 
 Cấu hình gửi Gmail trong `.env` ignored: SMTP_HOST=smtp.gmail.com, SMTP_PORT=587, SMTP_USERNAME=<Gmail gửi>, SMTP_PASSWORD=<App Password>, IDENTITY_MAIL_FROM=<Gmail gửi>, SMTP_AUTH=true, SMTP_STARTTLS=true. Recreate Identity sau khi sửa: `docker compose up -d --build identity-service`. Không đặt SMTP password trong EXPO_PUBLIC_* hoặc VITE_*.
 SMTP là dịch vụ tùy chọn khi khởi động, không nằm trong health liveness; endpoint gửi mã kiểm tra và báo lỗi thật nếu gửi thất bại.
+# Hồ sơ nhân viên: ngày sinh và avatar (15/10/2026)
+
+- Form ứng tuyển mới gửi dateOfBirth dạng YYYY-MM-DD và experienceYears; backend kiểm tra đủ 18 tuổi và suy ra birthYear. Payload cũ chỉ có birthYear vẫn được tiếp nhận, không tự tạo ngày/tháng sinh.
+- Cấp tài khoản từ ứng viên chuyển ngày sinh/năm sinh, giới tính, kinh nghiệm và giới thiệu sang staffs. Admin POST/PATCH staff hỗ trợ dateOfBirth, birthYear, gender, experienceYears, bio. Hồ sơ cũ có thể bổ sung ngày sinh tại Admin; bỏ trống trường tùy chọn trong API không xóa thông tin đã có.
+- V12 thêm staffs.birth_year và lấy lại năm sinh từ staff_candidates của tài khoản đã cấp. Không dùng 01/01 làm ngày sinh giả.
+- GET auth/profile, staff-directory và admin/staff trả dateOfBirth là chuỗi ngày lịch YYYY-MM-DD (không timestamp UTC), birthYear là số hoặc null. Directory chỉ gồm tài khoản đang hoạt động đã được cấp/duyệt.
+- Avatar mặc định của Staff lưu ở users.avatar_url là /api/v1/identity/staff-avatar.png, ảnh PNG công khai do Identity phục vụ. Profile, directory và màn quản trị dùng cùng giá trị; mobile/web ghép đường dẫn tương đối với API_BASE_URL. Ảnh đã có được giữ nguyên.
+- Customer không hiển thị nhãn CCCD/xác minh lặp lại. Khi chỉ có năm sinh, hiển thị năm sinh; khi không có dữ liệu, hiển thị chưa cập nhật thay vì 0 tuổi. Không bổ sung số CCCD hoặc thông tin liên hệ vào API directory công khai.
