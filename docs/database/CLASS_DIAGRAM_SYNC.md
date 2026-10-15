@@ -1,5 +1,11 @@
 # Ghi chú đồng bộ sơ đồ Class với database
 
+Cập nhật 15/10/2026: đã tạo `notification_db` với schema chuẩn bị trước thuộc Notification Service.
+Notification/Event/Device/Delivery được mô tả trong [NOTIFICATION_DB.md](NOTIFICATION_DB.md).
+API thông báo đang hoạt động vẫn dùng `identity_db.notifications`; chưa di chuyển dữ liệu hoặc
+chuyển producer/client. Khi trình bày class phân tích, có thể đặt Notification trong package đích;
+khi mô tả triển khai hiện tại, cần ghi rõ giai đoạn chuyển đổi này.
+
 Nguồn mới nhất: **Diagram/SoDoUC/Class Diagram1.jpg** (13/10/2026), đối chiếu cùng
 **Diagram/ClassDiagramSimple/** để giữ các lớp chi tiết đã bổ sung. Nguồn nền ban đầu là
 ClassDiageamV3.png; ClassDiagramV4.png chứa Use Case Diagram nên không dùng làm nguồn class.

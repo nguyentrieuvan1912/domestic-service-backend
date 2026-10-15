@@ -8,6 +8,7 @@ Prefix Gateway: `/api/v1/{identity|catalog|booking|finance|ai-assistant}`. ID en
 
 | Method / path sau prefix identity | Quyền | Chức năng |
 |---|---|---|
+| GET /administrative-units/hcm | Public | Danh mục 168 phường/xã/đặc khu từ administrative_units, gồm id nội bộ/name/type; Nghị quyết 1685/NQ-UBTVQH15, hiệu lực 01/07/2025 |
 | GET /staff-directory | Public | Thông tin hiển thị Staff đã được duyệt; không trả điện thoại, email, CCCD |
 | PATCH /staff/status | STAFF | `{isOnline:boolean}`; không bật nhận việc nếu bị đình chỉ/hạn chế |
 | POST /admin/staff | ADMIN | Cấp tài khoản sau tuyển dụng trực tiếp; fullname/phone/email/password/identityCard/rank |
@@ -23,6 +24,10 @@ Prefix Gateway: `/api/v1/{identity|catalog|booking|finance|ai-assistant}`. ID en
 | POST /internal/events | X-Service-Key | Sự kiện nội bộ; khóa riêng từ INTERNAL_SERVICE_TOKEN |
 
 Đăng ký Customer giữ hợp đồng Gmail → mã 6 chữ số → verificationToken → hồ sơ/mật khẩu. Staff không tự đăng ký. Bài Customer/Staff mới chờ duyệt; Admin có thể đăng thông báo. Media chưa có storage nên trả 503 khi đăng kèm tệp, không ghi URL file cục bộ giả.
+
+Địa chỉ TP.HCM theo mô hình hai cấp gửi `ward` là tên đầy đủ chọn từ danh mục (ví dụ `Phường Sài Gòn`), `district` rỗng hoặc không gửi, `city="TP. Hồ Chí Minh"`. Identity kiểm tra ward thuộc danh mục trước lưu. V11 chỉ thêm dữ liệu tham chiếu chính thức, không đổi địa chỉ hiện có. Payload cũ có district vẫn được hỗ trợ để đọc/sửa tương thích. Khi sửa trên mobile, khách chủ động chọn lại ward mới; không suy ra ward mới từ quận cũ.
+
+Booking dùng ward làm địa bàn khi district rỗng; snapshot cũ có district giữ cách đối chiếu cũ. Tên cột staff_areas.district và các field district trong DTO lịch/cơ hội/ca làm được giữ tương thích, nhưng với địa chỉ hai cấp chúng chứa tên phường/xã/đặc khu. Staff mobile/Admin web lấy lựa chọn mới từ cùng danh mục Identity; địa bàn cũ đã lưu vẫn hiển thị để giữ các ca cũ. Không tự mở rộng một quận cũ thành các phường mới.
 
 ## Catalog
 

@@ -9,7 +9,7 @@ try {
     if (-not (Test-Path .env)) { Copy-Item .env.example .env }
     switch ($Target) {
         "infra" { docker compose up -d --wait postgres }
-        "person1" { docker compose up -d --build postgres api-gateway identity-service catalog-service finance-service }
+        "person1" { docker compose up -d --build postgres api-gateway identity-service catalog-service finance-service notification-service }
         "person2" { docker compose up -d --build postgres api-gateway identity-service catalog-service booking-service ai-assistant-service }
         "all" { docker compose --profile backend up -d --build }
         "check" { & .\mvnw.cmd -B --no-transfer-progress verify }

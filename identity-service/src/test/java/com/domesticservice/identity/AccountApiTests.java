@@ -180,4 +180,33 @@ class AccountApiTests {
         assertThat(request("GET","/auth/me",null,staff).statusCode()).isEqualTo(401);
         assertThat(request("GET","/admin/staff",null,admin).body()).contains("Nhân viên đã cập nhật","PROFESSIONAL","BLOCKED","Thử khóa");
     }
+
+    @Test void publicDirectoryAndModernAddressPersistWithoutDistrict() throws Exception {
+        var directory=request("GET","/administrative-units/hcm",null,null);
+        assertThat(directory.statusCode()).isEqualTo(200);
+        assertThat(directory.body()).contains("Phường Sài Gòn","WARD");
+        String customer=token(request("POST","/auth/register",Map.of("fullName","Khách mới","phone","0900000006","email","ward@test.invalid","password","Customer!123"),null));
+        var input=Map.of("title","Nhà","recipientName","Khách mới","recipientPhone","0900000006","streetAddress","10 Đường thử nghiệm","ward","Phường Sài Gòn","city","TP. Hồ Chí Minh");
+        var created=request("POST","/customer/addresses",input,customer);
+        assertThat(created.statusCode()).isEqualTo(201);
+        long id=json.readTree(created.body()).get("id").asLong();
+        assertThat(db.queryForObject("SELECT district FROM addresses WHERE id=?",String.class,id)).isEmpty();
+        assertThat(db.queryForObject("SELECT ward FROM addresses WHERE id=?",String.class,id)).isEqualTo("Phường Sài Gòn");
+        assertThat(request("GET","/customer/addresses/"+id,null,customer).body()).contains("10 Đường thử nghiệm, Phường Sài Gòn, TP. Hồ Chí Minh");
+        assertThat(request("GET","/customer/addresses/"+id,null,admin).statusCode()).isEqualTo(403);
+    }
+    @Test void invalidModernWardDoesNotWriteAndLegacyAddressIsRetained() throws Exception {
+        String customer=token(request("POST","/auth/register",Map.of("fullName","Khách cũ","phone","0900000006","email","ward@test.invalid","password","Customer!123"),null));
+        var input=new LinkedHashMap<String,Object>(Map.of("title","Nhà","recipientName","Khách cũ","recipientPhone","0900000006","streetAddress","10 Đường thử nghiệm","ward","Quận 1","city","TP. Hồ Chí Minh"));
+        assertThat(request("POST","/customer/addresses",input,customer).statusCode()).isEqualTo(400);
+        assertThat(db.queryForObject("SELECT count(*) FROM addresses",Integer.class)).isZero();
+        input.put("district","Quận 1"); input.put("ward","Phường Bến Nghé");
+        var legacy=request("POST","/customer/addresses",input,customer);
+        assertThat(legacy.statusCode()).isEqualTo(201);
+        long id=json.readTree(legacy.body()).get("id").asLong();
+        assertThat(request("GET","/customer/addresses/"+id,null,customer).body()).contains("Phường Bến Nghé","Quận 1");
+        input.put("district",""); input.put("ward","Phường Sài Gòn");
+        assertThat(request("PUT","/customer/addresses/"+id,input,customer).statusCode()).isEqualTo(200);
+        assertThat(db.queryForObject("SELECT district FROM addresses WHERE id=?",String.class,id)).isEmpty();
+    }
 }

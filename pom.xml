@@ -21,6 +21,7 @@
         <module>booking-service</module>
         <module>finance-service</module>
         <module>ai-assistant-service</module>
+        <module>notification-service</module>
     </modules>
     <properties>
         <java.version>21</java.version>

@@ -1,7 +1,7 @@
 # Domestic Service Backend
 
 Backend monorepo cho nhóm 2 người. Mobile và Web giữ repo riêng.
-Nền tảng hiện tại có cấu hình chạy được, 64 bảng domain/kỹ thuật và dữ liệu demo local đã có từ trước.
+Nền tảng hiện tại có cấu hình chạy được, 69 bảng domain/kỹ thuật và dữ liệu demo local đã có từ trước. Identity V11 bổ sung danh mục 168 phường/xã/đặc khu TP.HCM chính thức, dùng chung cho địa chỉ Customer và khu vực Staff. Notification có 4 bảng chuẩn bị trước, chưa chuyển chức năng thông báo đang chạy trong Identity.
 Đã có API đọc Catalog (danh mục, tìm/lọc/phân trang, chi tiết dịch vụ) và tích hợp Web/Mobile.
 Đã nối Web với Identity: đăng ký/đăng nhập khách hàng và admin, quản lý trạng thái khách hàng, xét duyệt ứng viên và cấp tài khoản Staff.
 Đã nối luồng Customer/Staff mobile và Admin web: quote, booking, lịch/nhận ca, tiến độ, chat, đánh giá, thông báo, CRUD Catalog/Promo, kiểm duyệt và Finance ghi sổ/quyết toán tiền mặt. Xem [phạm vi thực tế theo V5](docs/api-contracts/operations-v5.md).
@@ -43,7 +43,8 @@ Docker build tự biên dịch Java bằng Maven Wrapper; không cần build tr�
 | booking-service | 8083 | booking_db | Người 2 |
 | finance-service | 8084 | finance_db | Người 1 |
 | ai-assistant-service | 8085 | ai_db | Người 2 |
-| PostgreSQL | 5433 | 5 database | Cấu hình chung / Người 1 |
+| notification-service (schema/health) | 8087 | notification_db | Người 1 |
+| PostgreSQL | 5433 | 6 database | Cấu hình chung / Người 1 |
 
 Trong Docker, từng app dùng cổng 8080 và PostgreSQL dùng 5432.
 Trên máy dùng 5433 để tránh PostgreSQL của dự án khác. Chỉ bind các cổng Docker vào localhost.
@@ -80,7 +81,9 @@ Nếu container service đang chạy, dừng container đó trước khi chạy 
 
 ## Database và migration
 
-Postgres init tự tạo 5 database cùng 5 role riêng; role thường không có quyền truy cập database khác.
+Postgres init tự tạo 6 database cùng 6 role riêng; role thường không có quyền truy cập database khác.
+Volume đã có từ trước cần chạy `.\scripts\prepare-notification-db.ps1` trước khi start Notification.
+Xem [thiết kế notification_db và đoạn mô tả báo cáo](docs/database/NOTIFICATION_DB.md).
 Admin role chỉ dùng để khởi tạo/quản trị. App không dùng admin credentials.
 Flyway chạy migration trong mỗi service khi khởi động; Hibernate chỉ validate và không tự tạo bảng.
 V1 là metadata; V2 tạo bảng domain/kỹ thuật; V3 đổi ID sang Long/BIGINT tự tăng.
@@ -120,7 +123,7 @@ không đổi password trong database; cần cập nhật role bằng SQL hoặc
 
 `mvnw verify` chạy kiểm tra context/database health bằng H2 và kiểm tra Gateway routing/CORS.
 `scripts/smoke.ps1` kiểm tra routing qua các app thật; Docker dùng PostgreSQL + Flyway thật.
-`scripts/verify-db.ps1` kiểm tra 64 bảng, migration/seed, slot overlap, refund total,
+`scripts/verify-db.ps1` kiểm tra 69 bảng, migration/seed, slot overlap, refund total,
 immutable ledger, wallet ownership, rating và default address; dữ liệu thử được rollback.
 GitHub Actions chạy cả Maven verify và Docker integration trên PR/main.
 Branch protection vẫn cần bật trong GitHub Settings; file CI không tự bật bảo vệ main.

@@ -15,6 +15,8 @@ services:
       FINANCE_DB_PASSWORD: ${FINANCE_DB_PASSWORD:-local_finance_change_me}
       AI_DB_USER: ${AI_DB_USER:-ai_app}
       AI_DB_PASSWORD: ${AI_DB_PASSWORD:-local_ai_change_me}
+      NOTIFICATION_DB_USER: ${NOTIFICATION_DB_USER:-notification_app}
+      NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD:-local_notification_change_me}
       AI_PROVIDER_URL: ${AI_PROVIDER_URL:-}
       AI_PROVIDER_KEY: ${AI_PROVIDER_KEY:-}
     ports:
@@ -157,6 +159,25 @@ services:
       FINANCE_SERVICE_URL: http://finance-service:8080
     ports:
       - "127.0.0.1:8085:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  notification-service:
+    profiles: ["backend"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        SERVICE: notification-service
+    environment:
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      NOTIFICATION_DB_USER: ${NOTIFICATION_DB_USER:-notification_app}
+      NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD:-local_notification_change_me}
+    ports:
+      - "127.0.0.1:8087:8080"
     depends_on:
       postgres:
         condition: service_healthy

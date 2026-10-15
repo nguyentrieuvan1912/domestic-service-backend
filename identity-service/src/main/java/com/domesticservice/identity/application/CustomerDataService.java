@@ -50,6 +50,16 @@ public class CustomerDataService {
     public Map<String,Object> saveAddress(User user,Long id,Address body) {
         lockCustomer(user);
         var existing=id==null?null:address(user,id);
+        String district=Objects.toString(body.district(),"").strip();
+        String ward=java.text.Normalizer.normalize(Objects.toString(body.ward(),"").strip(),java.text.Normalizer.Form.NFC);
+        String province=body.city().strip();
+        if(district.isBlank()) {
+            if(ward.isBlank()) throw error(HttpStatus.BAD_REQUEST,"Vui lòng chọn phường/xã.");
+            if(!List.of("TP. Hồ Chí Minh","Thành phố Hồ Chí Minh","Hồ Chí Minh").contains(province)) throw error(HttpStatus.BAD_REQUEST,"Danh mục phường/xã hiện hỗ trợ TP. Hồ Chí Minh.");
+            province="TP. Hồ Chí Minh";
+            if(!Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM administrative_units WHERE province=? AND name=?)",Boolean.class,province,ward))) throw error(HttpStatus.BAD_REQUEST,"Vui lòng chọn phường/xã hợp lệ trong danh sách TP. Hồ Chí Minh.");
+        }
+        final String savedProvince=province;
         boolean isDefault=Boolean.TRUE.equals(body.isDefault()) || (existing!=null && Boolean.TRUE.equals(existing.get("isDefault")))
             || !Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM addresses WHERE customer_id=? AND is_default=true)",Boolean.class,user.id()));
         if (isDefault) db.update("UPDATE addresses SET is_default=false,updated_at=CURRENT_TIMESTAMP WHERE customer_id=? AND is_default=true",user.id());
@@ -58,13 +68,13 @@ public class CustomerDataService {
             var key=new GeneratedKeyHolder();
             db.update(connection->{
                 var statement=connection.prepareStatement("INSERT INTO addresses(customer_id,title,receiver_name,receiver_phone,province,district,ward,detail_address,note,is_default) VALUES (?,?,?,?,?,?,?,?,?,?)",new String[]{"id"});
-                Object[] values={user.id(),body.title().strip(),body.recipientName().strip(),phone,body.city().strip(),body.district().strip(),Objects.toString(body.ward(),"").strip(),body.streetAddress().strip(),Objects.toString(body.note(),"").strip(),isDefault};
+                Object[] values={user.id(),body.title().strip(),body.recipientName().strip(),phone,savedProvince,district,ward,body.streetAddress().strip(),Objects.toString(body.note(),"").strip(),isDefault};
                 for(int i=0;i<values.length;i++) statement.setObject(i+1,values[i]);
                 return statement;
             },key);
             id=Objects.requireNonNull(key.getKey()).longValue();
         } else db.update("UPDATE addresses SET title=?,receiver_name=?,receiver_phone=?,province=?,district=?,ward=?,detail_address=?,note=?,is_default=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND customer_id=?",
-            body.title().strip(),body.recipientName().strip(),phone,body.city().strip(),body.district().strip(),Objects.toString(body.ward(),"").strip(),body.streetAddress().strip(),Objects.toString(body.note(),"").strip(),isDefault,id,user.id());
+            body.title().strip(),body.recipientName().strip(),phone,savedProvince,district,ward,body.streetAddress().strip(),Objects.toString(body.note(),"").strip(),isDefault,id,user.id());
         return address(user,id);
     }
     public Map<String,Object> setDefault(User user,long id) {

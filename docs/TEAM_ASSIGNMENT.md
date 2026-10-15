@@ -12,6 +12,11 @@ Mỗi người làm trọn controller, DTO, nghiệp vụ, repository, migration
 | Identity | Đăng ký/đăng nhập, password hash, JWT/refresh token, role Customer/Staff/Admin, khóa tài khoản, hồ sơ cơ bản, địa chỉ Customer |
 | Catalog | Category, Service, package, add-on, yêu cầu riêng của dịch vụ, giá/quote, promotion, API Admin CRUD và API đọc |
 | Finance | QR payment + xác nhận giao dịch, invoice, refund, earning ledger/số dư Staff, withdrawal + trạng thái duyệt/chi tiền |
+| Notification | Schema riêng notification_db, sự kiện/thông báo/thiết bị/lịch sử gửi; tích hợp producer và chuyển API khỏi Identity ở giai đoạn tiếp theo |
+
+Cập nhật 15/10/2026: Notification Service hiện chỉ có schema, migration và health (8087).
+Thông báo đang chạy vẫn thuộc Identity; Booking/Finance chưa đổi producer trong bước này.
+Đây là bổ sung theo yêu cầu chuẩn bị database cho báo cáo, không khẳng định đã tích hợp FCM/Expo.
 
 Thứ tự: cấu hình chung → Identity + Catalog → tích hợp Booking với người 2 → Finance.
 QR creation không đồng nghĩa thanh toán thành công; chỉ ghi nhận sau khi xác minh với nhà cung cấp/ngân hàng.

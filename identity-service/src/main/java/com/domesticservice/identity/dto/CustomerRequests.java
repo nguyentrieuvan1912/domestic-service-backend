@@ -10,7 +10,7 @@ public final class CustomerRequests {
                           @NotBlank @Pattern(regexp="(?:0[0-9]{9}|\\+84[0-9]{9})") String recipientPhone,
                           @NotBlank @Size(max=2000) String streetAddress,
                           @Size(max=100) String ward,
-                          @NotBlank @Size(max=100) String district,
+                          @Size(max=100) String district,
                           @NotBlank @Size(max=100) String city,
                           @Size(max=2000) String note,
                           Boolean isDefault) {}
