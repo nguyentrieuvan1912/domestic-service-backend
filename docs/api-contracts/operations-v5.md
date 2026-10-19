@@ -4,6 +4,18 @@ Cập nhật 14/10/2026. Phần này mô tả code hiện có; các contract d�
 
 Prefix Gateway: `/api/v1/{identity|catalog|booking|finance|ai-assistant}`. ID entity là số BIGINT; adapter giao diện chuyển sang string. Các route được bảo vệ nhận `Authorization: Bearer <accessToken>` từ Identity, xác minh tài khoản còn ACTIVE và kiểm tra role tại service sở hữu. Không có đăng nhập bằng tài khoản fixture trong ứng dụng.
 
+## Phạm vi phục vụ
+
+Phạm vi phục vụ chỉ ở TP. Hồ Chí Minh. API tạo/cập nhật địa chỉ từ chối thành phố khác với HTTP 400, bao gồm địa chỉ theo quận/huyện cũ. Booking cũng kiểm tra lại thành phố khi tạo đơn hoặc tìm nhân viên, để địa chỉ đã lưu từ trước không vượt qua giới hạn này. Các đơn lịch sử giữ nguyên snapshot địa chỉ.
+
+## Đề xuất gói theo diện tích (Catalog)
+
+`GET /api/v1/catalog/services/{id}/recommendation?areaM2=80&maxStaffCount=20&maxDurationMinutes=720` là API đọc công khai. Trả `status` (`RECOMMENDED`, `NO_MATCH`, `UNSUPPORTED`), `options` tăng dần theo `baseAmount`, rồi số nhân viên, thời lượng; cùng `unconfiguredPackageIds` và giải thích. Mỗi phương án có `packageId`, `packageName`, `requiredStaffCount`, `quantity`, `baseAmount`, `durationMinutes`, `coveredAreaM2`. Câu trả lời `areaM2` được kiểm tra theo requirement của dịch vụ; các kích thước dạng văn bản chưa có định mức không được tự suy diễn.
+
+`service_packages.max_area` là định mức diện tích của một gói với một nhóm `default_staff_count` nhân viên. Phương án đề xuất dùng đủ nhóm; số lượng gói chỉ thay đổi với đơn vị ITEM. Định mức = `max_area × quantity × floor(requiredStaffCount/defaultStaffCount)`. Giá gói dùng đúng quy tắc quote hiện có: `base_price × quantity × ceil(requiredStaffCount/defaultStaffCount)`; thời lượng = `duration_minutes × quantity`, làm tròn lên bước 30 phút như quote. Diện tích là tổng diện tích cần làm, không nhân thêm số tầng. Quote/create kiểm tra không thiếu định mức với các gói đã cấu hình. Gói thiếu max_area vẫn được chọn thủ công theo luồng cũ nhưng không tham gia so sánh tối ưu. Chi phí đề xuất chưa gồm tiện ích, dịch vụ kèm và ưu đãi; số cuối cùng vẫn phải lấy quote của backend.
+
+Mode A truyền `maxStaffCount=1` và giới hạn thời lượng còn phù hợp lịch nhân viên/tiện ích. Mode B cho phép tối đa 20 người. Mobile tự áp dụng đề xuất khi diện tích thay đổi; đổi gói thủ công không bị ghi đè khi chỉ tải lại cùng diện tích. Web chỉ xem đề xuất; đặt/lưu lịch vẫn trên ứng dụng.
+
 ## Identity
 
 | Method / path sau prefix identity | Quyền | Chức năng |

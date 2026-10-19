@@ -31,6 +31,17 @@ class CatalogReadApiTests {
         assertThat(json.readTree(response.body()).size()).isEqualTo(2);
         assertThat(response.body()).doesNotContain("HIDDEN");
     }
+    @Test void packageRecommendationUsesPersistedCapacityAndHonorsLimits() throws Exception {
+        var response=get("/services/1/recommendation?areaM2=120");
+        assertThat(response.statusCode()).isEqualTo(200);
+        var choice=json.readTree(response.body()).get("options").get(0);
+        assertThat(choice.get("requiredStaffCount").asInt()).isEqualTo(2);
+        assertThat(choice.get("baseAmount").asLong()).isEqualTo(360000);
+        assertThat(get("/services/1/recommendation?areaM2=120&maxStaffCount=1").body()).contains("NO_MATCH");
+        assertThat(get("/services/1/recommendation?areaM2=0").statusCode()).isEqualTo(400);
+        assertThat(get("/services/2/recommendation?areaM2=50").statusCode()).isEqualTo(404);
+        assertThat(get("/services/4/recommendation?areaM2=50").body()).contains("UNSUPPORTED");
+    }
     @Test void promotionsFilterAvailabilityAndExposeApplicableServices() throws Exception {
         var response=get("/promotions");
         assertThat(response.statusCode()).isEqualTo(200);

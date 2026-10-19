@@ -1,6 +1,8 @@
 package com.domesticservice.catalog.controller;
 
 import com.domesticservice.catalog.service.CatalogQueryService;
+import com.domesticservice.catalog.service.PackageRecommendationService;
+import java.math.BigDecimal;
 import com.domesticservice.catalog.dto.CatalogResponse.*;
 import java.util.List;
 import org.springframework.web.bind.annotation.*;
@@ -10,9 +12,11 @@ import org.springframework.web.bind.annotation.*;
 public class CatalogController {
 
     private final CatalogQueryService queries;
+    private final PackageRecommendationService recommendations;
 
-    public CatalogController(CatalogQueryService queries) {
+    public CatalogController(CatalogQueryService queries, PackageRecommendationService recommendations) {
         this.queries = queries;
+        this.recommendations = recommendations;
     }
 
     @GetMapping("/categories")
@@ -28,5 +32,11 @@ public class CatalogController {
     @GetMapping("/services/{id}")
     public Detail detail(@PathVariable long id) {
         return queries.detail(id);
+    }
+
+    @GetMapping("/services/{id}/recommendation")
+    public PackageRecommendation recommendation(@PathVariable long id, @RequestParam BigDecimal areaM2,
+        @RequestParam(defaultValue = "20") int maxStaffCount, @RequestParam(defaultValue = "720") int maxDurationMinutes) {
+        return recommendations.recommend(id, areaM2, maxStaffCount, maxDurationMinutes);
     }
 }

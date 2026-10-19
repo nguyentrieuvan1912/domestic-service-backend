@@ -49,6 +49,21 @@ class AccountApiTests {
     }
     String token(HttpResponse<String> response) { assertThat(response.statusCode()).isBetween(200,201); return json.readTree(response.body()).get("accessToken").asText(); }
     Map<String,Object> registration() { return Map.of("fullName","Khách thử nghiệm","phone","0900000002","email","customer@test.invalid","password","Customer!123","role","ADMIN"); }
+    @Test void customerAddressesRejectOutsideHcmEvenWithLegacyDistrict() throws Exception {
+        String customer=token(request("POST","/auth/register",registration(),null));
+        var body=new LinkedHashMap<String,Object>(Map.of("title","Nhà riêng","recipientName","Người nhận","recipientPhone","0900000002","streetAddress","123 Đường thử","district","Quận 1","city","Hà Nội"));
+        assertThat(request("POST","/customer/addresses",body,customer).statusCode()).isEqualTo(400);
+        assertThat(db.queryForObject("SELECT count(*) FROM addresses",Integer.class)).isZero();
+        body.put("city","Thành phố Hồ Chí Minh");
+        var saved=request("POST","/customer/addresses",body,customer);
+        assertThat(saved.statusCode()).isEqualTo(201);
+        assertThat(json.readTree(saved.body()).get("city").asText()).isEqualTo("TP. Hồ Chí Minh");
+        long id=json.readTree(saved.body()).get("id").asLong();
+        body.put("city","Đà Nẵng");
+        assertThat(request("PUT","/customer/addresses/"+id,body,customer).statusCode()).isEqualTo(400);
+        assertThat(db.queryForObject("SELECT province FROM addresses WHERE id=?",String.class,id)).isEqualTo("TP. Hồ Chí Minh");
+    }
+
     @Test void customerAddressesPersistAndEnforceOwnership() throws Exception {
         String customer=token(request("POST","/auth/register",registration(),null));
         String other=token(request("POST","/auth/register",Map.of("fullName","Khách khác","phone","0900000010","email","other@test.invalid","password","Customer!123"),null));
