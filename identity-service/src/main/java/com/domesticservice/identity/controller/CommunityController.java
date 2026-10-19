@@ -1,22 +1,49 @@
 package com.domesticservice.identity.controller;
-import com.domesticservice.identity.application.AccountService;
+
 import java.util.*;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
-@RestController @RequestMapping("/api/v1/identity")
+import com.domesticservice.identity.service.CommunityService;
+
+@RestController
+@RequestMapping("/api/v1/identity")
 public class CommunityController {
-    private final AccountService accounts;private final JdbcTemplate db;
-    public CommunityController(AccountService accounts,JdbcTemplate db){this.accounts=accounts;this.db=db;}
-    private String text(Map<String,Object>b,int max){String value=Objects.toString(b.get("content"),"").strip();if(value.isEmpty()||value.length()>max)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Nội dung không hợp lệ.");return value;}
-    private void visible(long id,long user,boolean admin){if(!Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM community_posts WHERE id=? AND (status='PUBLISHED' OR user_id=? OR ?))",Boolean.class,id,user,admin)))throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Không tìm thấy bài viết.");}
-    private List<Map<String,Object>>posts(long user,boolean admin){var result=db.queryForList("SELECT p.id,p.user_id AS \"userId\",u.full_name AS author,u.avatar_url AS avatar,p.content,p.status,p.created_at AS \"createdAt\",p.moderation_note AS \"moderationNote\",(SELECT count(*) FROM community_likes l WHERE l.post_id=p.id) AS likes,EXISTS(SELECT 1 FROM community_likes l WHERE l.post_id=p.id AND l.user_id=?) AS \"isLiked\" FROM community_posts p JOIN users u ON u.id=p.user_id WHERE p.status='PUBLISHED' OR p.user_id=? OR ? ORDER BY p.created_at DESC,p.id DESC LIMIT 100",user,user,admin);for(var item:result){item.put("comments",db.queryForList("SELECT c.id,c.content,u.full_name AS author,c.created_at AS \"createdAt\" FROM community_comments c JOIN users u ON u.id=c.user_id WHERE c.post_id=? ORDER BY c.id LIMIT 200",item.get("id")));if(!admin)item.remove("moderationNote");}return result;}
-    @GetMapping("/community/posts")public List<Map<String,Object>>list(@RequestHeader(value="Authorization",required=false)String token){return posts(token==null?0:accounts.authenticate(token,false).id(),false);}
-    @GetMapping("/admin/community/posts")public List<Map<String,Object>>admin(@RequestHeader(value="Authorization",required=false)String token){return posts(accounts.authenticate(token,true).id(),true);}
-    @PostMapping("/community/posts") @ResponseStatus(HttpStatus.CREATED) @Transactional public Map<String,Object>create(@RequestHeader(value="Authorization",required=false)String token,@RequestBody Map<String,Object>b){var user=accounts.authenticate(token,false);String content=text(b,5000);if(b.get("media") instanceof List<?>media&&!media.isEmpty())throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Chưa cấu hình lưu trữ ảnh/video. Bài có tệp chưa được đăng; bạn có thể đăng nội dung văn bản.");String status="ADMIN".equals(user.role())?"PUBLISHED":"PENDING";long id=db.queryForObject("INSERT INTO community_posts(user_id,content,status) VALUES (?,?,?) RETURNING id",Long.class,user.id(),content,status);return Map.of("id",id,"status",status);}
-    @PostMapping("/community/posts/{id}/comments") @ResponseStatus(HttpStatus.CREATED) @Transactional public Map<String,Object>comment(@RequestHeader(value="Authorization",required=false)String token,@PathVariable long id,@RequestBody Map<String,Object>b){var user=accounts.authenticate(token,false);visible(id,user.id(),"ADMIN".equals(user.role()));long result=db.queryForObject("INSERT INTO community_comments(post_id,user_id,content) VALUES (?,?,?) RETURNING id",Long.class,id,user.id(),text(b,2000));return Map.of("id",result);}
-    @PatchMapping("/community/posts/{id}/like") @Transactional public Map<String,Object>like(@RequestHeader(value="Authorization",required=false)String token,@PathVariable long id,@RequestBody Map<String,Object>b){var user=accounts.authenticate(token,false);visible(id,user.id(),"ADMIN".equals(user.role()));if(!(b.get("liked") instanceof Boolean liked))throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Trạng thái thích không hợp lệ.");if(liked)db.update("INSERT INTO community_likes(post_id,user_id) VALUES (?,?) ON CONFLICT DO NOTHING",id,user.id());else db.update("DELETE FROM community_likes WHERE post_id=? AND user_id=?",id,user.id());return Map.of("id",id,"isLiked",liked,"likes",db.queryForObject("SELECT count(*) FROM community_likes WHERE post_id=?",Long.class,id));}
-    @PatchMapping("/admin/community/posts/{id}") @Transactional public Map<String,Object>moderate(@RequestHeader(value="Authorization",required=false)String token,@PathVariable long id,@RequestBody Map<String,Object>b){var user=accounts.authenticate(token,true);String status=Objects.toString(b.get("status"),""),note=Objects.toString(b.get("note"),"");if(!List.of("PENDING","PUBLISHED","HIDDEN").contains(status)||note.length()>2000)throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Trạng thái kiểm duyệt không hợp lệ.");if(db.update("UPDATE community_posts SET status=?,moderation_note=?,reviewed_by=?,updated_at=now() WHERE id=?",status,note,user.id(),id)==0)throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Không tìm thấy bài viết.");return Map.of("id",id,"status",status);}
+
+    private final CommunityService service;
+
+    public CommunityController(CommunityService service) {
+        this.service = service;
+    }
+
+    @GetMapping("/community/posts")
+    public List<Map<String, Object>> list(@RequestHeader(value = "Authorization", required = false) String token) {
+        return service.list(token);
+    }
+
+    @GetMapping("/admin/community/posts")
+    public List<Map<String, Object>> admin(@RequestHeader(value = "Authorization", required = false) String token) {
+        return service.admin(token);
+    }
+
+    @PostMapping("/community/posts")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Object> create(@RequestHeader(value = "Authorization", required = false) String token, @RequestBody Map<String, Object> b) {
+        return service.create(token, b);
+    }
+
+    @PostMapping("/community/posts/{id}/comments")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Object> comment(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id, @RequestBody Map<String, Object> b) {
+        return service.comment(token, id, b);
+    }
+
+    @PatchMapping("/community/posts/{id}/like")
+    public Map<String, Object> like(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id, @RequestBody Map<String, Object> b) {
+        return service.like(token, id, b);
+    }
+
+    @PatchMapping("/admin/community/posts/{id}")
+    public Map<String, Object> moderate(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id, @RequestBody Map<String, Object> b) {
+        return service.moderate(token, id, b);
+    }
 }

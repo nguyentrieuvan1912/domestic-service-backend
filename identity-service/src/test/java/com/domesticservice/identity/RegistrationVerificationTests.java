@@ -1,6 +1,6 @@
 package com.domesticservice.identity;
 
-import com.domesticservice.identity.application.*;
+import com.domesticservice.identity.service.*;
 import java.net.URI;
 import java.net.http.*;
 import java.util.*;
@@ -43,13 +43,13 @@ class RegistrationVerificationTests {
     }
     String start(String email) throws Exception {
         var response=request("POST","/auth/register/email",Map.of("email",email),null);
-        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
         assertThat(response.body()).doesNotContain(delivered.get(email));
         return json.readTree(response.body()).get("challengeId").asText();
     }
     String verify(String email,String challenge) throws Exception {
         var response=request("POST","/auth/register/verify",Map.of("challengeId",challenge,"code",delivered.get(email)),null);
-        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
         return json.readTree(response.body()).get("verificationToken").asText();
     }
     Map<String,Object> registration(String proof,String phone,String name) {

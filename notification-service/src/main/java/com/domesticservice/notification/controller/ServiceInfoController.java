@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 public class ServiceInfoController {
+
     @GetMapping("/api/v1/notification/system/info")
     public Map<String, String> info() {
         return Map.of("service", "notification-service", "stage", "schema-ready");

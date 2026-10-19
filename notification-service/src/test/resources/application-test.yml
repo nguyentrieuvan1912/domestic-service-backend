@@ -6,3 +6,7 @@ spring:
     password:
   flyway:
     enabled: false
+
+  jpa:
+    hibernate:
+      ddl-auto: none

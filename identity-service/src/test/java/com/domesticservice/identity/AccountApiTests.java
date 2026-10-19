@@ -1,6 +1,6 @@
 package com.domesticservice.identity;
 
-import com.domesticservice.identity.application.AccountService;
+import com.domesticservice.identity.service.AccountService;
 import java.net.URI;
 import java.net.http.*;
 import java.util.*;
@@ -38,7 +38,7 @@ class AccountApiTests {
             String proof=UUID.randomUUID().toString();
             db.update("DELETE FROM registration_verifications WHERE email=?",email);
             db.update("INSERT INTO registration_verifications(email,challenge_id,code_hash,expires_at,sent_at,window_started_at,verification_token_hash,verified_until) VALUES (?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?,?)",
-                email,UUID.randomUUID().toString(),"test-fixture",com.domesticservice.identity.application.RegistrationVerificationService.digest(proof),java.sql.Timestamp.from(java.time.Instant.now().plusSeconds(1200)));
+                email,UUID.randomUUID().toString(),"test-fixture",com.domesticservice.identity.service.RegistrationVerificationService.digest(proof),java.sql.Timestamp.from(java.time.Instant.now().plusSeconds(1200)));
             input.put("verificationToken",proof); body=input;
         }
         var builder=HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/api/v1/identity"+path))

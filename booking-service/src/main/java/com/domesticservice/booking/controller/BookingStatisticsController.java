@@ -1,12 +1,22 @@
 package com.domesticservice.booking.controller;
-import com.domesticservice.booking.application.BookingOperationsService;
+
 import java.time.*;
 import java.util.*;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
-@RestController @RequestMapping("/api/v1/booking/admin")
+import com.domesticservice.booking.service.BookingStatisticsService;
+
+@RestController
+@RequestMapping("/api/v1/booking/admin")
 public class BookingStatisticsController {
-    private final BookingOperationsService ops;private final JdbcTemplate db;
-    public BookingStatisticsController(BookingOperationsService ops,JdbcTemplate db){this.ops=ops;this.db=db;}
-    @GetMapping("/statistics")public Map<String,Object>stats(@RequestHeader(value="Authorization",required=false)String token,@RequestParam(defaultValue="2026")int year,@RequestParam(defaultValue="year")String period){ops.actor(token,"ADMIN");if(year<2020||year>2100)throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Năm không hợp lệ.");var start=LocalDate.of(year,1,1).atStartOfDay(ZoneId.of("Asia/Ho_Chi_Minh")).toOffsetDateTime();var end=start.plusYears(1);int month=LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).getMonthValue();int first=period.equals("month")?month:period.matches("q[1-4]")?(Integer.parseInt(period.substring(1))-1)*3+1:1;int length=period.equals("month")?1:period.matches("q[1-4]")?3:12;if(!period.equals("year")&&!period.equals("month")&&!period.matches("q[1-4]"))throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Kỳ không hợp lệ.");var shareStart=start.plusMonths(first-1);var shareEnd=shareStart.plusMonths(length);return Map.of("monthly",db.queryForList("SELECT EXTRACT(MONTH FROM created_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::int AS month,count(*) AS bookings,count(*) FILTER(WHERE status='COMPLETED') AS completed,count(*) FILTER(WHERE status IN ('CANCELLED','REFUNDED','ABSENT','REJECTED')) AS cancelled FROM bookings WHERE created_at>=? AND created_at<? GROUP BY 1 ORDER BY 1",start,end),"serviceShares",db.queryForList("SELECT coalesce(service_snapshot->>'name',service_snapshot->>'serviceName','Dịch vụ') AS name,count(*) AS value,sum(total_amount) AS amount FROM bookings WHERE created_at>=? AND created_at<? GROUP BY 1 ORDER BY value DESC",shareStart,shareEnd),"districts",db.queryForList("SELECT coalesce(address_snapshot->>'district','Chưa có khu vực') AS district,count(*) AS bookings FROM bookings WHERE created_at>=? AND created_at<? GROUP BY 1 ORDER BY bookings DESC LIMIT 10",shareStart,shareEnd));}
+
+    private final BookingStatisticsService service;
+
+    public BookingStatisticsController(BookingStatisticsService service) {
+        this.service = service;
+    }
+
+    @GetMapping("/statistics")
+    public Map<String, Object> stats(@RequestHeader(value = "Authorization", required = false) String token, @RequestParam(defaultValue = "2026") int year, @RequestParam(defaultValue = "year") String period) {
+        return service.stats(token, year, period);
+    }
 }

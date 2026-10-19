@@ -9,6 +9,12 @@ spring:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/notification_db
     username: ${NOTIFICATION_DB_USER:notification_app}
     password: ${NOTIFICATION_DB_PASSWORD:local_notification_change_me}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.jdbc.time_zone: UTC
   flyway:
     enabled: true
 management:

@@ -8,12 +8,13 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 @Component
 public class AccountResponseHeaders extends OncePerRequestFilter {
-    @Override protected void doFilterInternal(HttpServletRequest request,HttpServletResponse response,FilterChain chain)
-            throws ServletException,IOException {
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws ServletException, IOException {
         if (request.getRequestURI().startsWith("/api/v1/identity/")) {
-            response.setHeader("Cache-Control","no-store");
-            response.setHeader("Pragma","no-cache");
+            response.setHeader("Cache-Control", "no-store");
+            response.setHeader("Pragma", "no-cache");
         }
-        chain.doFilter(request,response);
+        chain.doFilter(request, response);
     }
 }

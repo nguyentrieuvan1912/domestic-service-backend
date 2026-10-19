@@ -1,7 +1,7 @@
 # Domestic Service Backend
 
 Backend monorepo cho nhóm 2 người. Mobile và Web giữ repo riêng.
-Nền tảng hiện tại có cấu hình chạy được, 69 bảng domain/kỹ thuật và dữ liệu demo local đã có từ trước. Identity V11 bổ sung danh mục 168 phường/xã/đặc khu TP.HCM chính thức, dùng chung cho địa chỉ Customer và khu vực Staff. Notification có 4 bảng chuẩn bị trước, chưa chuyển chức năng thông báo đang chạy trong Identity.
+Nền tảng hiện tại có cấu hình chạy được, 70 bảng domain/kỹ thuật và dữ liệu demo local đã có từ trước. Identity V11 bổ sung danh mục 168 phường/xã/đặc khu TP.HCM chính thức, dùng chung cho địa chỉ Customer và khu vực Staff. Notification có 4 bảng chuẩn bị trước, chưa chuyển chức năng thông báo đang chạy trong Identity.
 Đã có API đọc Catalog (danh mục, tìm/lọc/phân trang, chi tiết dịch vụ) và tích hợp Web/Mobile.
 Đã nối Web với Identity: đăng ký/đăng nhập khách hàng và admin, quản lý trạng thái khách hàng, xét duyệt ứng viên và cấp tài khoản Staff.
 Đã nối luồng Customer/Staff mobile và Admin web: quote, booking, lịch/nhận ca, tiến độ, chat, đánh giá, thông báo, CRUD Catalog/Promo, kiểm duyệt và Finance ghi sổ/quyết toán tiền mặt. Xem [phạm vi thực tế theo V5](docs/api-contracts/operations-v5.md).
@@ -123,7 +123,7 @@ không đổi password trong database; cần cập nhật role bằng SQL hoặc
 
 `mvnw verify` chạy kiểm tra context/database health bằng H2 và kiểm tra Gateway routing/CORS.
 `scripts/smoke.ps1` kiểm tra routing qua các app thật; Docker dùng PostgreSQL + Flyway thật.
-`scripts/verify-db.ps1` kiểm tra 69 bảng, migration/seed, slot overlap, refund total,
+`scripts/verify-db.ps1` kiểm tra 70 bảng, migration/seed, slot overlap, refund total,
 immutable ledger, wallet ownership, rating và default address; dữ liệu thử được rollback.
 GitHub Actions chạy cả Maven verify và Docker integration trên PR/main.
 Branch protection vẫn cần bật trong GitHub Settings; file CI không tự bật bảo vệ main.
@@ -159,3 +159,14 @@ Xem docs/api-contracts/identity.md để biết body API mới; body đăng ký 
 ## Kết nối khách hàng — đợt đầu
 
 Đã bổ sung API sổ địa chỉ theo tài khoản, thông báo và trạng thái đã đọc, tiếp nhận form Liên hệ vào Identity; API hiển thị ưu đãi từ Catalog. Mobile/Web dùng dữ liệu API ở những màn đã nối và chỉ báo thành công sau khi lưu. Xem [contract customer-data](docs/api-contracts/customer-data.md) và CUSTOMER_API_PLAN.md ở workspace để phân biệt phần hoàn thành và phần còn chờ Booking/Finance/AI.
+
+## Cấu trúc code và ánh xạ JPA
+
+Các service dùng tầng `controller`, `dto`, `service`, `entity`, `repository`, `config`.
+Package `application` cũ được chuyển thành `service`; các API và luồng nghiệp vụ giữ nguyên.
+70 Entity ánh xạ schema của sáu database, bao gồm 44 lớp trong bộ sơ đồ lớp.
+Quan hệ nội bộ dùng JPA; tham chiếu sang service khác giữ ID. Các truy vấn đặc thù PostgreSQL
+được giữ trong Repository nghiệp vụ/native để bảo toàn khóa đồng thời và thứ tự ghi sổ.
+
+- [Hướng dẫn tìm code, kiến trúc và kiểm thử](docs/BACKEND_CODE_STRUCTURE.md)
+- [Bảng đối chiếu lớp – Entity – bảng – Repository](docs/CLASS_CODE_MAPPING.md)

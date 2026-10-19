@@ -4,7 +4,7 @@ Push-Location (Split-Path $PSScriptRoot -Parent)
 try {
     $dbAdmin = (docker compose exec -T postgres printenv POSTGRES_USER).Trim()
     if ($LASTEXITCODE -ne 0) { throw "PostgreSQL is not running" }
-    $expected = @{ identity_db = 16; catalog_db = 8; booking_db = 17; finance_db = 17; ai_db = 7 }
+    $expected = @{ identity_db = 16; catalog_db = 8; booking_db = 18; finance_db = 17; ai_db = 7 }
     foreach ($database in @("identity_db","catalog_db","booking_db","finance_db","ai_db")) {
         $module = @{ identity_db='identity-service'; catalog_db='catalog-service'; booking_db='booking-service'; finance_db='finance-service'; ai_db='ai-assistant-service' }[$database]
         $migrationFiles = Get-ChildItem "$module/src/main/resources/db/migration/V*__*.sql"
