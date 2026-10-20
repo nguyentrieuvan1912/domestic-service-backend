@@ -4,8 +4,19 @@ Push-Location (Split-Path $PSScriptRoot -Parent)
 try {
     $dbAdmin = (docker compose exec -T postgres printenv POSTGRES_USER).Trim()
     if ($LASTEXITCODE -ne 0) { throw "PostgreSQL is not running" }
-    $expected = @{ identity_db = 7; catalog_db = 8; booking_db = 15; finance_db = 16; ai_db = 7 }
+    $expected = @{ identity_db = 16; catalog_db = 8; booking_db = 18; finance_db = 17; ai_db = 7 }
     foreach ($database in @("identity_db","catalog_db","booking_db","finance_db","ai_db")) {
+        $module = @{ identity_db='identity-service'; catalog_db='catalog-service'; booking_db='booking-service'; finance_db='finance-service'; ai_db='ai-assistant-service' }[$database]
+        $migrationFiles = Get-ChildItem "$module/src/main/resources/db/migration/V*__*.sql"
+        $latestVersion = ($migrationFiles.Name | ForEach-Object { [int]([regex]::Match($_, '^V(\d+)__').Groups[1].Value) } | Measure-Object -Maximum).Maximum
+        $latestApplied = docker compose exec -T postgres psql -U $dbAdmin -d $database -t -A -c "SELECT count(*) FROM flyway_schema_history WHERE success AND version='$latestVersion';"
+        if ($LASTEXITCODE -ne 0 -or [int]$latestApplied -ne 1) { throw "Latest migration V$latestVersion is not applied in $database" }
+        $expectedTables = @($migrationFiles | ForEach-Object {
+            [regex]::Matches((Get-Content -Raw $_.FullName), '(?im)^CREATE TABLE\s+(\w+)') | ForEach-Object { $_.Groups[1].Value }
+        } | Where-Object { $_ -ne 'service_schema_metadata' } | Sort-Object -Unique)
+        $actualTables = @(docker compose exec -T postgres psql -U $dbAdmin -d $database -t -A -c "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('service_schema_metadata','flyway_schema_history') ORDER BY tablename;")
+        if ($LASTEXITCODE -ne 0) { throw "Cannot read table inventory in $database" }
+        if (Compare-Object $expectedTables $actualTables) { throw "Table names differ from migrations in $database" }
         $tableCount = docker compose exec -T postgres psql -U $dbAdmin -d $database -t -A -c "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('service_schema_metadata','flyway_schema_history');"
         if ($LASTEXITCODE -ne 0 -or [int]$tableCount -ne $expected[$database]) { throw "Unexpected table count in $database" }
         $migrations = docker compose exec -T postgres psql -U $dbAdmin -d $database -t -A -c "SELECT count(DISTINCT coalesce(version,description)) FROM flyway_schema_history WHERE success AND (version IN ('2','3') OR description='demo data');"
@@ -23,4 +34,19 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Database constraints failed for $service" }
         Write-Output "$service constraints OK (test changes rolled back)"
     }
+    Get-Content -Raw scripts/db-checks/community-posts.sql |
+        docker compose exec -T postgres psql -U $dbAdmin -d identity_db -v ON_ERROR_STOP=1 -q
+    if ($LASTEXITCODE -ne 0) { throw "CommunityPost persistence/ownership checks failed" }
+    Write-Output "CommunityPost persistence and ownership OK (test changes rolled back)"
+    $notificationTables = @(docker compose exec -T postgres psql -U $dbAdmin -d notification_db -At -c "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('service_schema_metadata','flyway_schema_history') ORDER BY tablename;")
+    if ($LASTEXITCODE -ne 0) { throw 'notification_db is missing; prepare it and start notification-service' }
+    if (Compare-Object @('notification_deliveries','notification_devices','notification_events','notifications') $notificationTables) { throw 'Unexpected notification table inventory' }
+    $notificationMigrations = docker compose exec -T postgres psql -U $dbAdmin -d notification_db -At -c "SELECT count(*) FROM flyway_schema_history WHERE success AND version IN ('1','2');"
+    if ($LASTEXITCODE -ne 0 -or [int]$notificationMigrations -ne 2) { throw 'Notification Flyway migrations are missing' }
+    foreach ($check in @('numeric-ids','notification')) {
+        Get-Content -Raw "scripts/db-checks/$check.sql" |
+            docker compose exec -T postgres psql -U $dbAdmin -d notification_db -v ON_ERROR_STOP=1 -q
+        if ($LASTEXITCODE -ne 0) { throw "Notification $check checks failed" }
+    }
+    Write-Output 'notification_db : 4 domain tables, Flyway, persistence, deduplication and device ownership OK (rolled back)'
 } finally { Pop-Location }

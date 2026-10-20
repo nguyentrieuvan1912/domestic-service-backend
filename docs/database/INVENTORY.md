@@ -1,19 +1,32 @@
 # Database inventory
 
-Nguồn schema: ClassDiageamV3.png + model Mobile + nghiệp vụ QR/ví/AI đã chốt.
-Đã áp dụng vào PostgreSQL local ngày 2026-10-05.
+Nguồn schema: Diagram/SoDoUC/Class Diagram1.jpg (13/10/2026), các góc nhìn ClassDiagramSimple,
+model Mobile và nghiệp vụ QR/ví/AI đã chốt. Identity V6 bổ sung CommunityPost; V7 bổ sung support_requests để lưu form Liên hệ. Hai bảng này không thêm seed.
 
-Có 53 bảng domain/kỹ thuật và 205 dòng demo sau seed UI Catalog; chưa tính service_schema_metadata và flyway_schema_history
-(2 bảng hạ tầng trong mỗi database). 47 bảng có demo; 6 bảng vận hành để trống có chủ ý.
-Không có dữ liệu người dùng/ngân hàng thật. Tài khoản demo không đăng nhập được.
+Cập nhật 15/10/2026: có 69 bảng domain/kỹ thuật và baseline 205 dòng demo sau seed UI Catalog; chưa tính service_schema_metadata và flyway_schema_history
+(2 bảng hạ tầng trong mỗi database). 47 bảng có demo; 22 bảng không có demo. administrative_units có 168 bản ghi tham chiếu hành chính chính thức, không tính vào 205 dòng demo. Các migration nghiệp vụ không tạo tài khoản hoặc tiền mẫu mới.
+Số dòng trên chỉ tính seed, không gồm account/ứng viên được tạo bằng API hoặc bootstrap admin. Không có dữ liệu người dùng/ngân hàng thật trong seed. Tài khoản demo không đăng nhập được.
 
 | Database | Bảng domain/kỹ thuật | Dòng demo |
 |---|---:|---:|
-| identity_db | 7 | 8 |
+| identity_db | 16 | 8 |
 | catalog_db | 8 | 152 |
-| booking_db | 15 | 17 |
-| finance_db | 16 | 21 |
+| booking_db | 17 | 17 |
+| finance_db | 17 | 21 |
 | ai_db | 7 | 7 |
+| notification_db | 4 | 0 |
+
+Notification là schema chuẩn bị trước, không seed và chưa thay thế `identity_db.notifications`.
+Xem [NOTIFICATION_DB.md](NOTIFICATION_DB.md) về bảng, quan hệ và phạm vi triển khai.
+
+## notification_db
+
+| Bảng | Dòng demo |
+|---|---:|
+| notification_events | 0 |
+| notifications | 0 |
+| notification_devices | 0 |
+| notification_deliveries | 0 |
 
 ## identity_db
 
@@ -26,6 +39,15 @@ Không có dữ liệu người dùng/ngân hàng thật. Tài khoản demo khô
 | addresses | 1 |
 | notifications | 1 |
 | refresh_tokens | 0 |
+| account_sessions | 0 |
+| staff_candidates | 0 |
+| registration_verifications | 0 |
+| community_posts | 0 |
+| support_requests | 0 |
+| community_comments | 0 |
+| community_likes | 0 |
+| customer_favorites | 0 |
+| administrative_units | 0 (168 bản ghi tham chiếu chính thức) |
 
 ## catalog_db
 
@@ -60,6 +82,8 @@ Số dòng trên là baseline khi chưa thêm dữ liệu nghiệp vụ; không 
 | staff_availabilities | 1 |
 | staff_service_capabilities | 1 |
 | staff_restrictions | 1 |
+| staff_schedule_settings | 0 |
+| booking_incidents | 0 |
 | conversations | 1 |
 | messages | 1 |
 | staff_reservations | 1 |
@@ -83,6 +107,7 @@ Số dòng trên là baseline khi chưa thêm dữ liệu nghiệp vụ; không 
 | staff_bank_accounts | 1 |
 | withdrawals | 1 |
 | wallet_transactions | 4 |
+| finance_settings | 0 |
 | payment_webhook_events | 1 |
 | idempotency_records | 0 |
 | outbox_events | 0 |

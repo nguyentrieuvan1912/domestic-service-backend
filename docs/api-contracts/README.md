@@ -1,7 +1,7 @@
 # Quy ước hợp đồng API
 
-Các endpoint nghiệp vụ trong file từng service là **dự thảo cần hai người chốt**.
-Hiện chỉ system/info và actuator/health đã có code.
+Các file từng service có thể chứa **dự thảo cần hai người chốt**.
+Phạm vi nghiệp vụ đã triển khai cập nhật 14/10/2026 nằm trong [operations-v5.md](operations-v5.md), gồm Customer/Staff mobile và Admin web. Đối chiếu file này trước khi dùng các endpoint dự kiến trong contract cũ.
 Mỗi owner cập nhật contract của mình trong cùng PR triển khai API.
 
 - Prefix /api/v1/{service}/...; Gateway không strip prefix.
@@ -13,12 +13,14 @@ Mỗi owner cập nhật contract của mình trong cùng PR triển khai API.
 - Thành công trả resource DTO; danh sách trả {items, page, size, total}.
 - Lỗi dùng application/problem+json: type, title, status, detail, instance;
   validation thêm errors: {field: message}.
-- POST tạo booking/payment/refund/earning nhận Idempotency-Key; lưu và kiểm tra ở service sở hữu.
+- Các endpoint hiện có dùng requestKey/clientKey theo [operations-v5.md](operations-v5.md); lưu và kiểm tra ở service sở hữu. Idempotency-Key trong contract cũ là đề xuất, không mặc định đã được hỗ trợ.
 - Contract chốt rõ status enum, phiên bản quote, timeout, retry và cơ chế bù trừ/reconciliation.
-- Internal API sẽ xác thực service-to-service khi triển khai security; không mặc định public qua Gateway.
-- Chưa cấu hình JWT. Trước tích hợp thật chốt issuer/audience/key rotation/role và kiểm tra JWT ở từng service,
-  không chỉ tại Gateway. Admin endpoint cần phân quyền ngay tại owning service.
+- Internal events đã dùng X-Service-Key riêng. Bearer session được xác minh qua Identity và role được kiểm tra tại từng owning service. JWT issuer/audience/key rotation là phần nâng cấp chưa triển khai.
 - Tài liệu OpenAPI/Swagger bổ sung khi có DTO/endpoint thật, tránh sinh tài liệu giả cho scaffold.
 
 Mỗi contract cần ghi method/path, request/response mẫu, validation, role, lỗi,
 idempotency, status transition và consumer. Thay đổi phá tương thích phải phối hợp owner bên gọi.
+
+## Customer frontend integration
+
+See [customer-data.md](customer-data.md) for owned addresses, notification read state, public support intake and promotion display. The full customer rollout plan is in the workspace-level CUSTOMER_API_PLAN.md.

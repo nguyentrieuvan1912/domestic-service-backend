@@ -1,4 +1,5 @@
-param([string]$BaseUrl = "http://localhost:8080", [int]$TimeoutSeconds = 180)
+param([string]$BaseUrl = "http://localhost:8080", [int]$TimeoutSeconds = 180,
+      [string]$NotificationUrl = "http://localhost:8087")
 $ErrorActionPreference = "Stop"
 foreach ($service in @("identity", "catalog", "booking", "finance", "ai-assistant")) {
     $uri = "$BaseUrl/api/v1/$service/system/info"
@@ -15,3 +16,17 @@ foreach ($service in @("identity", "catalog", "booking", "finance", "ai-assistan
         }
     } while ($true)
 }
+# Schema-only service is not routed through Gateway until API cutover.
+$deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+do {
+    try {
+        $response = Invoke-RestMethod -Uri "$NotificationUrl/api/v1/notification/system/info" -TimeoutSec 5
+        $health = Invoke-RestMethod -Uri "$NotificationUrl/actuator/health" -TimeoutSec 5
+        if ($response.service -ne 'notification-service' -or $health.status -ne 'UP') { throw 'Unexpected notification status' }
+        Write-Output "notification OK ($($response.stage), database health UP)"
+        break
+    } catch {
+        if ((Get-Date) -ge $deadline) { throw "Notification smoke check failed: $_" }
+        Start-Sleep -Seconds 2
+    }
+} while ($true)

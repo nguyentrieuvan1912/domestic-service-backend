@@ -13,3 +13,4 @@ create_service_database "$CATALOG_DB_USER" "$CATALOG_DB_PASSWORD" catalog_db
 create_service_database "$BOOKING_DB_USER" "$BOOKING_DB_PASSWORD" booking_db
 create_service_database "$FINANCE_DB_USER" "$FINANCE_DB_PASSWORD" finance_db
 create_service_database "$AI_DB_USER" "$AI_DB_PASSWORD" ai_db
+create_service_database "${NOTIFICATION_DB_USER:-notification_app}" "${NOTIFICATION_DB_PASSWORD:-local_notification_change_me}" notification_db

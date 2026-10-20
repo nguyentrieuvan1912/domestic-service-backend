@@ -15,6 +15,10 @@ services:
       FINANCE_DB_PASSWORD: ${FINANCE_DB_PASSWORD:-local_finance_change_me}
       AI_DB_USER: ${AI_DB_USER:-ai_app}
       AI_DB_PASSWORD: ${AI_DB_PASSWORD:-local_ai_change_me}
+      NOTIFICATION_DB_USER: ${NOTIFICATION_DB_USER:-notification_app}
+      NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD:-local_notification_change_me}
+      AI_PROVIDER_URL: ${AI_PROVIDER_URL:-}
+      AI_PROVIDER_KEY: ${AI_PROVIDER_KEY:-}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
@@ -34,12 +38,23 @@ services:
       args:
         SERVICE: identity-service
     environment:
+      IDENTITY_BOOTSTRAP_EMAIL: ${IDENTITY_BOOTSTRAP_EMAIL:-}
+      IDENTITY_BOOTSTRAP_PHONE: ${IDENTITY_BOOTSTRAP_PHONE:-}
+      IDENTITY_BOOTSTRAP_PASSWORD: ${IDENTITY_BOOTSTRAP_PASSWORD:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_AUTH: ${SMTP_AUTH:-true}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      IDENTITY_MAIL_FROM: ${IDENTITY_MAIL_FROM:-}
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev-seed}
       SERVER_PORT: 8080
       DB_HOST: postgres
       DB_PORT: 5432
       IDENTITY_DB_USER: ${IDENTITY_DB_USER:-identity_app}
       IDENTITY_DB_PASSWORD: ${IDENTITY_DB_PASSWORD:-local_identity_change_me}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
       IDENTITY_SERVICE_URL: http://identity-service:8080
       CATALOG_SERVICE_URL: http://catalog-service:8080
       BOOKING_SERVICE_URL: http://booking-service:8080
@@ -88,6 +103,7 @@ services:
       DB_PORT: 5432
       BOOKING_DB_USER: ${BOOKING_DB_USER:-booking_app}
       BOOKING_DB_PASSWORD: ${BOOKING_DB_PASSWORD:-local_booking_change_me}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
       IDENTITY_SERVICE_URL: http://identity-service:8080
       CATALOG_SERVICE_URL: http://catalog-service:8080
       BOOKING_SERVICE_URL: http://booking-service:8080
@@ -112,6 +128,7 @@ services:
       DB_PORT: 5432
       FINANCE_DB_USER: ${FINANCE_DB_USER:-finance_app}
       FINANCE_DB_PASSWORD: ${FINANCE_DB_PASSWORD:-local_finance_change_me}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
       IDENTITY_SERVICE_URL: http://identity-service:8080
       CATALOG_SERVICE_URL: http://catalog-service:8080
       BOOKING_SERVICE_URL: http://booking-service:8080
@@ -142,6 +159,25 @@ services:
       FINANCE_SERVICE_URL: http://finance-service:8080
     ports:
       - "127.0.0.1:8085:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+  notification-service:
+    profiles: ["backend"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        SERVICE: notification-service
+    environment:
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      NOTIFICATION_DB_USER: ${NOTIFICATION_DB_USER:-notification_app}
+      NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD:-local_notification_change_me}
+    ports:
+      - "127.0.0.1:8087:8080"
     depends_on:
       postgres:
         condition: service_healthy
