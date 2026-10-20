@@ -1,5 +1,10 @@
 server:
   port: ${SERVER_PORT:8081}
+community:
+  cloudinary:
+    cloud-name: ${CLOUDINARY_CLOUD_NAME:}
+    api-key: ${CLOUDINARY_API_KEY:}
+    api-secret: ${CLOUDINARY_API_SECRET:}
 identity:
   mail:
     from: ${IDENTITY_MAIL_FROM:}

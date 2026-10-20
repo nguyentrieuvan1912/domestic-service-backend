@@ -62,7 +62,7 @@ public class StaffResponseSqlRepository {
     }
 
     public int decideUpdateBookings2(Object... args) {
-        return db.update("UPDATE bookings SET staff_response_deadline=clock_timestamp()+interval '3 minutes',staff_wait_state='WAITING',staff_wait_round=staff_wait_round+1,cancel_reason=NULL,cancelled_at=NULL,cancelled_by=NULL,cancelled_by_type=NULL WHERE id=?", args);
+        return db.update("UPDATE bookings SET staff_response_deadline=clock_timestamp()+interval '5 minutes',staff_wait_state='WAITING',staff_wait_round=staff_wait_round+1,cancel_reason=NULL,cancelled_at=NULL,cancelled_by=NULL,cancelled_by_type=NULL WHERE id=?", args);
     }
 
     public Map<String, Object> decideFindBookings2(Object... args) {

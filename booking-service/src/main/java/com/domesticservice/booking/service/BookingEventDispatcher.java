@@ -56,6 +56,10 @@ public class BookingEventDispatcher {
                     var b = books.getFirst();
                     var payload = json.readValue(event.get("payload").toString(), new TypeReference<Map<String, Object>>() {
                     });
+                    if ("CALL_INCOMING".equals(event.get("event_type"))) {
+                        identity.internalEvent(key,Map.of("eventKey","call:"+payload.get("callId"),"userIds",List.of(payload.get("recipientId")),"type","CALL_INCOMING","title","Cuộc gọi từ "+payload.get("callerName"),"content","Cuộc gọi về đơn "+b.get("booking_code")+". Nhấn để trả lời.","referenceId",payload.get("callId"),"data",payload,"bookingCreated",false));
+                        repository.dispatchUpdateOutboxEvents2(id);return;
+                    }
                     if ("CHAT_MESSAGE".equals(event.get("event_type"))) {
                         identity.internalEvent(key, Map.of("eventKey", "chat-message:" + payload.get("messageId"), "userIds", List.of(payload.get("recipientId")), "type", "CHAT_MESSAGE", "title", "Tin nhắn mới từ " + payload.get("senderName"), "content", "Bạn có tin nhắn mới về đơn " + b.get("booking_code") + ". Nhấn để mở cuộc trò chuyện.", "referenceId", payload.get("conversationId"), "data", Map.of("bookingId", b.get("id"), "conversationId", payload.get("conversationId"), "messageId", payload.get("messageId")), "bookingCreated", false));
                         repository.dispatchUpdateOutboxEvents2(id);
@@ -79,12 +83,12 @@ public class BookingEventDispatcher {
                     boolean renewed = "STAFF_ASSIGNED".equals(state) && "CANCELLED".equals(payload.get("oldStatus"));
                     if (expired) {
                         long customer = ((Number) b.get("customer_id")).longValue();
-                        identity.internalEvent(key, Map.of("eventKey", "booking:" + id + ":customer", "userIds", List.of(customer), "type", "BOOKING_CANCELLED", "title", "Nhân viên chưa nhận đơn " + code, "content", "Nhân viên bạn chọn đang bận. Bạn có muốn chờ thêm 3 phút hoặc tìm nhân viên khác?", "referenceId", b.get("id"), "data", Map.of("bookingId", b.get("id")), "bookingCreated", false));
+                        identity.internalEvent(key, Map.of("eventKey", "booking:" + id + ":customer", "userIds", List.of(customer), "type", "BOOKING_CANCELLED", "title", "Nhân viên chưa nhận đơn " + code, "content", "Nhân viên bạn chọn đang bận. Bạn có muốn chờ thêm 5 phút hoặc tìm nhân viên khác?", "referenceId", b.get("id"), "data", Map.of("bookingId", b.get("id")), "bookingCreated", false));
                         users.remove(customer);
                         if (!users.isEmpty())
                             identity.internalEvent(key, Map.of("eventKey", "booking:" + id + ":staff", "userIds", users.stream().toList(), "type", "BOOKING_CANCELLED", "title", "Hết thời gian nhận đơn " + code, "content", "Lời mời đã hủy do hết thời gian nhận đơn. Hãy chú ý lời mời và phản hồi sớm hơn để có doanh thu tốt hơn.", "referenceId", b.get("id"), "data", Map.of("bookingId", b.get("id")), "bookingCreated", false));
                     } else
-                        identity.internalEvent(key, Map.of("eventKey", "booking:" + id, "userIds", users.stream().toList(), "type", renewed ? "BOOKING_CREATED" : type, "title", "Đơn " + code, "content", renewed ? "Khách hàng chờ thêm 3 phút. Nhân viên vui lòng phản hồi lời mời nhận đơn." : "Trạng thái đơn " + code + ": " + state + ".", "referenceId", b.get("id"), "data", Map.of("bookingId", b.get("id")), "bookingCreated", created || renewed));
+                        identity.internalEvent(key, Map.of("eventKey", "booking:" + id, "userIds", users.stream().toList(), "type", renewed ? "BOOKING_CREATED" : type, "title", "Đơn " + code, "content", renewed ? "Khách hàng chờ thêm 5 phút. Nhân viên vui lòng phản hồi lời mời nhận đơn." : "Trạng thái đơn " + code + ": " + state + ".", "referenceId", b.get("id"), "data", Map.of("bookingId", b.get("id")), "bookingCreated", created || renewed));
                     repository.dispatchUpdateOutboxEvents3(id);
                 } catch (RuntimeException ex) {
                     repository.dispatchUpdateOutboxEvents4(id);

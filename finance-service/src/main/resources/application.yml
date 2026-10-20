@@ -1,5 +1,14 @@
 server:
   port: ${SERVER_PORT:8084}
+payments:
+  payos:
+    enabled: ${PAYOS_ENABLED:false}
+    client-id: ${PAYOS_CLIENT_ID:}
+    api-key: ${PAYOS_API_KEY:}
+    checksum-key: ${PAYOS_CHECKSUM_KEY:}
+    account-number: ${PAYOS_ACCOUNT_NUMBER:}
+    return-url: ${PAYOS_RETURN_URL:}
+    cancel-url: ${PAYOS_CANCEL_URL:}
 spring:
   application:
     name: finance-service

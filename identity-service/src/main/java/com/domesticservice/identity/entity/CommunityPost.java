@@ -35,6 +35,11 @@ public class CommunityPost {
     @Column(name = "content", nullable = false, columnDefinition = "text")
     private String content;
 
+    @Column(name="request_key",length=160)
+    private String requestKey;
+    @Column(name="request_hash",length=64)
+    private String requestHash;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "media_urls", nullable = false, columnDefinition = "jsonb")
     private String mediaUrls;

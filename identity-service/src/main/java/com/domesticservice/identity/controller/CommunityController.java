@@ -46,4 +46,13 @@ public class CommunityController {
     public Map<String, Object> moderate(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id, @RequestBody Map<String, Object> b) {
         return service.moderate(token, id, b);
     }
+
+    @GetMapping("/community/posts/{id}")
+    public Map<String,Object> post(@RequestHeader(value="Authorization",required=false) String token,@PathVariable long id){return service.post(token,id);}
+    @GetMapping("/community/posts/{id}/comments")
+    public Map<String,Object> comments(@RequestHeader(value="Authorization",required=false) String token,@PathVariable long id,@RequestParam(required=false) Long before,@RequestParam(required=false) Long after){return service.comments(token,id,before,after);}
+    @PatchMapping("/community/posts/{id}/reaction")
+    public Map<String,Object> reaction(@RequestHeader(value="Authorization",required=false) String token,@PathVariable long id,@RequestBody Map<String,Object> b){return service.react(token,id,b);}
+    @PatchMapping("/community/posts/{id}/comments/{commentId}/reaction")
+    public Map<String,Object> commentReaction(@RequestHeader(value="Authorization",required=false) String token,@PathVariable long id,@PathVariable long commentId,@RequestBody Map<String,Object> b){return service.commentReaction(token,id,commentId,b);}
 }
