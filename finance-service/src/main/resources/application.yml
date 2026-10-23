@@ -1,6 +1,16 @@
 server:
   port: ${SERVER_PORT:8084}
 payments:
+  payout:
+    enabled: ${PAYOS_PAYOUT_ENABLED:false}
+    client-id: ${PAYOS_PAYOUT_CLIENT_ID:}
+    api-key: ${PAYOS_PAYOUT_API_KEY:}
+    checksum-key: ${PAYOS_PAYOUT_CHECKSUM_KEY:}
+    source-account: ${PAYOS_PAYOUT_SOURCE_ACCOUNT:}
+    source-name: ${PAYOS_PAYOUT_SOURCE_NAME:}
+    bank-bins: ${PAYOS_PAYOUT_BANK_BINS:}
+    minimum: ${PAYOS_PAYOUT_MINIMUM:50000}
+    maximum: ${PAYOS_PAYOUT_MAXIMUM:1000000}
   payos:
     enabled: ${PAYOS_ENABLED:false}
     client-id: ${PAYOS_CLIENT_ID:}

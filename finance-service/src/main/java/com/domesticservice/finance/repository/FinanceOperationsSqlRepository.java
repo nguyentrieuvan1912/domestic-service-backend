@@ -34,7 +34,7 @@ public class FinanceOperationsSqlRepository {
     }
 
     public List<Map<String, Object>> walletFindWithdrawals(Object... args) {
-        return db.queryForList("SELECT id,amount,status,requested_at AS \"requestedAt\",rejection_reason AS \"rejectionReason\" FROM withdrawals WHERE staff_id=? ORDER BY id DESC", args);
+        return db.queryForList("SELECT w.id,w.amount,w.status,w.requested_at AS \"requestedAt\",w.rejection_reason AS \"rejectionReason\",p.status AS \"payoutStatus\",p.message AS \"payoutMessage\" FROM withdrawals w LEFT JOIN withdrawal_payouts p ON p.withdrawal_id=w.id WHERE w.staff_id=? ORDER BY w.id DESC", args);
     }
 
     public List<Map<String, Object>> banksFindStaffBankAccounts(Object... args) {
@@ -82,15 +82,15 @@ public class FinanceOperationsSqlRepository {
     }
 
     public List<Map<String, Object>> adminBanksFindStaffBankAccounts(Object... args) {
-        return db.queryForList("SELECT id,staff_id AS \"staffId\",bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",status FROM staff_bank_accounts ORDER BY id DESC", args);
+        return db.queryForList("SELECT id,staff_id AS \"staffId\",bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",status,verified_at AS \"verifiedAt\",verification_note AS \"verificationNote\" FROM staff_bank_accounts ORDER BY id DESC", args);
     }
 
     public int verifyBankUpdateStaffBankAccounts(Object... args) {
-        return db.update("UPDATE staff_bank_accounts SET status=? WHERE id=?", args);
+        return db.update("UPDATE staff_bank_accounts SET status=?,verification_note=?,verified_by=?,verified_at=now() WHERE id=?", args);
     }
 
     public List<Map<String, Object>> withdrawalsFindWithdrawals(Object... args) {
-        return db.queryForList("SELECT id,staff_id AS \"staffId\",amount,status,requested_at AS \"requestedAt\",approved_at AS \"approvedAt\",bank_account_snapshot::text AS \"bankAccount\",rejection_reason AS \"rejectionReason\" FROM withdrawals ORDER BY id DESC", args);
+        return db.queryForList("SELECT w.id,w.staff_id AS \"staffId\",w.amount,w.status,w.requested_at AS \"requestedAt\",w.approved_at AS \"approvedAt\",w.bank_account_snapshot::text AS \"bankAccount\",w.rejection_reason AS \"rejectionReason\",p.status AS \"payoutStatus\",p.message AS \"payoutMessage\" FROM withdrawals w LEFT JOIN withdrawal_payouts p ON p.withdrawal_id=w.id ORDER BY w.id DESC", args);
     }
 
     public List<Map<String, Object>> reviewWithdrawalFindWithdrawalsForUpdate(Object... args) {

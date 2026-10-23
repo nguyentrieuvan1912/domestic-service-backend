@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Isolated PostgreSQL with real Flyway migrations/transactions; HTTP peers are test fixtures only. */
 @EnabledIfEnvironmentVariable(named="TOPUP_POSTGRES_VERIFY",matches="true")
 @SpringBootTest(classes=StaffTopupPostgresTests.Config.class,webEnvironment=SpringBootTest.WebEnvironment.NONE,
-    properties={"spring.datasource.url=${TOPUP_TEST_URL}","spring.datasource.username=postgres","spring.datasource.password=topup_test_only","spring.jpa.hibernate.ddl-auto=none","spring.flyway.enabled=true"})
+    properties={"spring.datasource.url=${TOPUP_TEST_URL}","spring.datasource.username=postgres","spring.datasource.password=topup_test_only","spring.jpa.hibernate.ddl-auto=none","spring.flyway.enabled=true","PAYOS_VIRTUAL_ACCOUNT_BANK_BIN=","PAYOS_VIRTUAL_ACCOUNT_NAME="})
 class StaffTopupPostgresTests {
     @Configuration(proxyBeanMethods=false)
     @EnableAutoConfiguration
@@ -75,10 +75,26 @@ class StaffTopupPostgresTests {
     @Autowired JdbcTemplate db;
     @Autowired Peer peer;
     long staff;
-    @BeforeEach void prepare(){staff=ThreadLocalRandom.current().nextLong(10000000,100000000);peer.loseCreate=false;peer.account="12345678";}
+    @BeforeEach void prepare(){staff=ThreadLocalRandom.current().nextLong(10000000,100000000);peer.loseCreate=false;peer.account="12345678";peer.client.configureVirtualAccounts("","");}
     String token(){return "Bearer "+staff;}
     long create(){return ((Number)service.create(token(),new StaffTopupRequest(10000,"test-"+staff)).get("id")).longValue();}
     long balance(){return db.queryForObject("SELECT available_balance FROM staff_balances WHERE staff_id=?",Long.class,staff);}
+    @Test void inAppQrOnlyExposesTheStoredVerifiedAndUnexpiredPendingIntent() {
+        long id=create();
+        var pending=service.list(token(),false).getFirst();
+        assertEquals("transport-fixture",pending.get("qrCode"));
+        assertEquals("12345678",pending.get("accountNumber"));
+        assertEquals(db.queryForObject("SELECT qr_content FROM staff_topups WHERE id=?",String.class,id),pending.get("qrCode"));
+        db.update("UPDATE staff_topups SET expires_at=now()-interval '1 second' WHERE id=?",id);
+        assertNull(service.list(token(),false).getFirst().get("qrCode"));
+        db.update("UPDATE staff_topups SET expires_at=now()+interval '1 minute',receiving_account_verified=false WHERE id=?",id);
+        assertNull(service.list(token(),false).getFirst().get("qrCode"));
+        db.update("UPDATE staff_topups SET receiving_account_verified=true,status='REVIEW' WHERE id=?",id);
+        assertNull(service.list(token(),false).getFirst().get("qrCode"));
+        peer.paid(id,10000);
+        assertNull(service.refresh(token(),id,false).get("qrCode"));
+        assertEquals(10000,balance());
+    }
     @Test void onlyConfirmedMoneyCreditsOnceEvenWithConcurrentRefreshes() throws Exception {
         long id=create();assertEquals(0,balance());
         assertEquals(id,((Number)service.create(token(),new StaffTopupRequest(10000,"test-"+staff)).get("id")).longValue());
@@ -114,5 +130,18 @@ class StaffTopupPostgresTests {
     @Test void wrongReceivingAccountDoesNotExposeCheckoutOrCredit() {
         peer.account="99999999";assertThrows(ResponseStatusException.class,this::create);assertEquals(0,balance());
         assertNull(service.list(token(),false).getFirst().get("checkoutUrl"));
+    }
+    @Test void virtualAccountWebhookMustMatchTheExactAccountPersistedForItsTopup() {
+        peer.client.configureVirtualAccounts("970422","Test peer");peer.account="virtual-first";
+        long first=create();peer.account="virtual-second";
+        long second=((Number)service.create(token(),new StaffTopupRequest(10000,"second-"+staff)).get("id")).longValue();
+        assertEquals("virtual-first",service.list(token(),false).stream().filter(row->((Number)row.get("id")).longValue()==first).findFirst().orElseThrow().get("accountNumber"));
+        var data=new LinkedHashMap<String,Object>(Map.of("orderCode",first,"amount",10000,"accountNumber","virtual-second","currency","VND","reference","virtual-test-"+first,"code","00"));
+        peer.paid(first,10000);
+        assertThrows(ResponseStatusException.class,()->service.webhook(Map.of("success",true,"data",data,"signature",peer.client.sign(data))));
+        assertEquals(0,balance());data.put("accountNumber","virtual-first");
+        service.webhook(Map.of("success",true,"data",data,"signature",peer.client.sign(data)));
+        service.webhook(Map.of("success",true,"data",data,"signature",peer.client.sign(data)));
+        assertEquals(10000,balance());assertEquals("PENDING",service.refresh(token(),second,false).get("status"));
     }
 }

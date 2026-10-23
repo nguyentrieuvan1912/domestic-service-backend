@@ -55,7 +55,7 @@ public class StaffTopupService {
             return view(repository.find(id,false));
         }
         var link=provider.create(id,request.amount(),row.get("description").toString(),((java.sql.Timestamp)row.get("expires_at")).toInstant().getEpochSecond());
-        if(number(link,"orderCode")!=id || number(link,"amount")!=request.amount() || !provider.expectedAccount().equals(link.get("accountNumber"))
+        if(number(link,"orderCode")!=id || number(link,"amount")!=request.amount() || !provider.receivingAccountMatches(link)
             || !row.get("description").equals(link.get("description")) || !"VND".equals(link.get("currency"))
             || !validCheckout(Objects.toString(link.get("checkoutUrl"),"")) || Objects.toString(link.get("paymentLinkId"),"").isBlank())
             throw conflict("Thông tin tài khoản nhận hoặc mã thanh toán payOS không khớp cấu hình. Chưa được chuyển tiền.");
@@ -87,7 +87,7 @@ public class StaffTopupService {
         var row=repository.find(id,false);
         // Provider's setup sample and other channel payments must never create a wallet or credit money.
         if(row==null) return;
-        if(!provider.expectedAccount().equals(data.get("accountNumber")) || !"VND".equals(data.get("currency"))) throw conflict("Tài khoản nhận không khớp.");
+        if(!Boolean.TRUE.equals(row.get("receiving_account_verified")) || !Objects.equals(row.get("account_number"),data.get("accountNumber")) || !"VND".equals(data.get("currency"))) throw conflict("Tài khoản nhận không khớp yêu cầu nạp.");
         String reference=Objects.toString(data.get("reference"),"");
         if(reference.isBlank() || reference.length()>120) throw conflict("Thiếu mã giao dịch ngân hàng.");
         tx.executeWithoutResult(state->repository.event("payos:"+reference,id,json.writeValueAsString(envelope)));
@@ -133,6 +133,10 @@ public class StaffTopupService {
         for(String key:List.of("id","amount","status","description")) result.put(key,row.get(key));
         result.put("staffId",row.get("staff_id"));result.put("checkoutUrl",row.get("checkout_url"));
         result.put("requestKey",row.get("request_key"));
+        // Expose only the provider-signed QR persisted for this verified, payable intent.
+        boolean payable=Boolean.TRUE.equals(row.get("receiving_account_verified")) && "PENDING".equals(row.get("status"))
+            && ((java.sql.Timestamp)row.get("expires_at")).toInstant().isAfter(Instant.now());
+        result.put("qrCode",payable?row.get("qr_content"):null);
         result.put("accountNumber",row.get("account_number"));result.put("accountName",row.get("account_name"));result.put("bankBin",row.get("bank_bin"));
         result.put("amountReceived",row.get("amount_received"));result.put("createdAt",row.get("created_at"));
         result.put("expiresAt",row.get("expires_at"));result.put("paidAt",row.get("paid_at"));result.put("verifiedAt",row.get("verified_at"));

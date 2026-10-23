@@ -18,10 +18,13 @@ public class FinanceOperationsService {
     private final ObjectMapper json;
 
     private final ServiceHttpClient identity, booking;
+    private final PayoutBankDirectory payoutBanks;
+    private final com.domesticservice.finance.config.PayoutProperties payoutConfig;
 
-    public FinanceOperationsService(FinanceOperationsSqlRepository repository, ObjectMapper json, @Value("${clients.identity.base-url}") String identityUrl, @Value("${clients.booking.base-url}") String bookingUrl) {
+    public FinanceOperationsService(FinanceOperationsSqlRepository repository, ObjectMapper json, @Value("${clients.identity.base-url}") String identityUrl, @Value("${clients.booking.base-url}") String bookingUrl, PayoutBankDirectory payoutBanks, com.domesticservice.finance.config.PayoutProperties payoutConfig) {
         this.repository = repository;
         this.json = json;
+        this.payoutBanks=payoutBanks; this.payoutConfig=payoutConfig;
         identity = new ServiceHttpClient(identityUrl);
         booking = new ServiceHttpClient(bookingUrl);
     }
@@ -73,10 +76,11 @@ public class FinanceOperationsService {
     @Transactional
     public Map<String, Object> saveBank(String token, Map<String, Object> b) {
         long staff = ServiceHttpClient.userId(identity.authenticate(token, "STAFF"));
-        balance(staff, true);
         String bank = text(b, "bankCode", 30, true), account = text(b, "accountNumber", 50, true), holder = text(b, "accountHolder", 160, true);
+        if (!payoutBanks.supports(bank)) throw bad("Vui lòng chọn ngân hàng trong danh sách hỗ trợ đã cấu hình.");
         if (!account.matches("[0-9]{5,30}"))
             throw bad("Số tài khoản phải có 5–30 chữ số.");
+        balance(staff, true);
         var existing = repository.saveBankFindStaffBankAccounts(Long.class, staff, bank, account);
         if (!existing.isEmpty())
             return Map.of("id", existing.getFirst(), "status", repository.saveBankFindStaffBankAccounts2(String.class, existing.getFirst()));
@@ -88,7 +92,7 @@ public class FinanceOperationsService {
     @Transactional
     public Map<String, Object> withdraw(String token, Map<String, Object> b) {
         long staff = ServiceHttpClient.userId(identity.authenticate(token, "STAFF"));
-        long amount = number(b, "amount", 50000, 1000000000), bankId = number(b, "bankAccountId", 1, Long.MAX_VALUE);
+        long amount = number(b, "amount", payoutConfig.minimum(), payoutConfig.maximum()), bankId = number(b, "bankAccountId", 1, Long.MAX_VALUE);
         String key = text(b, "requestKey", 160, true);
         var wallet = balance(staff, true);
         var previous = repository.withdrawFindWithdrawals(staff, key);
@@ -133,7 +137,9 @@ public class FinanceOperationsService {
         String state = text(b, "status", 20, true);
         if (!List.of("VERIFIED", "INACTIVE").contains(state))
             throw bad("Chỉ được xác minh hoặc ngừng tài khoản.");
-        if (repository.verifyBankUpdateStaffBankAccounts(state, id) == 0)
+        String note="VERIFIED".equals(state)?text(b,"verificationNote",2000,true):"";
+        if("VERIFIED".equals(state) && note.length()<8) throw bad("Ghi rõ nguồn đối chiếu số tài khoản và tên người nhận.");
+        if (repository.verifyBankUpdateStaffBankAccounts(state, note, ServiceHttpClient.userId(identity.authenticate(token,"ADMIN")), id) == 0)
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy tài khoản ngân hàng.");
         return Map.of("id", id, "status", state);
     }

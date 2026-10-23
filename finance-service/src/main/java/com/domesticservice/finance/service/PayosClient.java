@@ -24,6 +24,8 @@ public class PayosClient {
     private final ObjectMapper json;
     private final HttpClient http;
     private final URI base;
+    private String virtualAccountBankBin = "";
+    private String virtualAccountName = "";
 
     @org.springframework.beans.factory.annotation.Autowired
     public PayosClient(PayosProperties config, ObjectMapper json) {
@@ -33,12 +35,28 @@ public class PayosClient {
     PayosClient(PayosProperties config, ObjectMapper json, HttpClient http, URI base) {
         this.config = config; this.json = json; this.http = http; this.base = base;
     }
-    public boolean ready() { return config.ready(); }
+    @org.springframework.beans.factory.annotation.Autowired
+    void configureVirtualAccounts(
+        @org.springframework.beans.factory.annotation.Value("${PAYOS_VIRTUAL_ACCOUNT_BANK_BIN:}") String bankBin,
+        @org.springframework.beans.factory.annotation.Value("${PAYOS_VIRTUAL_ACCOUNT_NAME:}") String accountName) {
+        virtualAccountBankBin = bankBin.strip(); virtualAccountName = accountName.strip();
+    }
+    public boolean ready() { return config.ready() && virtualAccountBankBin.isBlank() == virtualAccountName.isBlank(); }
     public void requireReady() {
         if (!ready()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
             "Chưa kết nối payOS. Cần cấu hình kênh thanh toán và tài khoản nhận tiền trước khi nạp.");
     }
     public String expectedAccount() { return config.accountNumber(); }
+    public boolean receivingAccountMatches(Map<String,Object> signedLink) {
+        String account = Objects.toString(signedLink.get("accountNumber"), "");
+        if (account.isBlank()) return false;
+        if (virtualAccountBankBin.isBlank() && virtualAccountName.isBlank()) return config.accountNumber().equals(account);
+        // Only called after the provider envelope signature has been verified. VietQR Pro issues a new
+        // virtual account per payment; pin the user-confirmed bank and beneficiary, then persist that exact account.
+        return !virtualAccountBankBin.isBlank() && !virtualAccountName.isBlank()
+            && virtualAccountBankBin.equals(signedLink.get("bin"))
+            && virtualAccountName.equals(signedLink.get("accountName"));
+    }
 
     public Map<String, Object> create(long id, long amount, String description, long expiresAt) {
         var body = new LinkedHashMap<String, Object>();
@@ -78,7 +96,10 @@ public class PayosClient {
             if (response.statusCode() == 404 && allowMissing) return null;
             if (response.statusCode() != 200) throw unavailable();
             var envelope = json.readValue(response.body(), new TypeReference<Map<String, Object>>() {});
-            if (allowMissing && "231".equals(envelope.get("code"))) return null;
+            // The live provider also returns 101 for an order that has not been created.
+            // Do not treat other 101 errors (e.g. invalid credentials) as a missing payment.
+            if (allowMissing && ("231".equals(envelope.get("code")) || "101".equals(envelope.get("code"))
+                && "Mã thanh toán không tồn tại".equals(envelope.get("desc")))) return null;
             if (!"00".equals(envelope.get("code")) || !(envelope.get("data") instanceof Map<?, ?>)) throw unavailable();
             var data = (Map<String, Object>) envelope.get("data");
             if (!verify(data, Objects.toString(envelope.get("signature"), ""))) throw unavailable();

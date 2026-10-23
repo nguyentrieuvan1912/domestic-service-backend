@@ -16,8 +16,12 @@ All endpoints below require Bearer authentication except the signed webhook and 
 | POST | /webhooks/payos | Public HMAC SHA256, persist known event, re-fetch provider proof before credit |
 | GET | /payments/return | Public informational text only; never marks paid/cancelled |
 
-Response topup: id, staffId, amount, requestKey, status, description, checkoutUrl,
+Response topup: id, staffId, amount, requestKey, status, description, checkoutUrl, qrCode,
 accountNumber, accountName, bankBin, amountReceived, createdAt, expiresAt, verifiedAt, paidAt.
+qrCode is the exact signed provider payload stored in staff_topups.qr_content; clients render it locally,
+without sending payment information to third-party QR image generators. It is null unless the receiving
+account was verified and the request is PENDING and unexpired. Mobile displays the QR in-app and keeps
+polling the owned request list; closing the QR screen does not cancel the request or mark it paid.
 Unconfigured provider: 503 on creation; no fake QR or wallet credit. Capabilities remains readable.
 403 for wrong role; 404 for another staff's request; 409 for request key reused with a different amount.
 
@@ -35,3 +39,10 @@ Wallet and money entries are append-only. No withdrawal/booking settlement polic
 Finance-only Docker environment variables: PAYOS_ENABLED, PAYOS_CLIENT_ID, PAYOS_API_KEY,
 PAYOS_CHECKSUM_KEY, PAYOS_ACCOUNT_NUMBER, PAYOS_RETURN_URL, PAYOS_CANCEL_URL.
 Use ignored .env, never frontend variables. Configuration readiness is not a successful bank connection test.
+
+VietQR Pro can issue a different receiving virtual account per payment. In that case configure both
+PAYOS_VIRTUAL_ACCOUNT_BANK_BIN and PAYOS_VIRTUAL_ACCOUNT_NAME from the beneficiary/bank confirmed by the owner.
+Keep PAYOS_ACCOUNT_NUMBER as the original bank account; never pin a single generated virtual account for all requests.
+Creation still verifies the signed provider response, exact bank BIN/beneficiary, order/amount/description/currency/link;
+persists the individual accountNumber on staff_topups. Webhooks must match that exact persisted account for the same
+order, not an account from another payment. Leave both virtual-account settings empty for fixed-account mode.
