@@ -25,7 +25,7 @@ public class WithdrawalPayoutRepository {
     public void uncertain(long id) {
         db.update("UPDATE withdrawal_payouts SET status='REVIEW',message='Chưa xác minh được kết quả gửi. Giữ tiền và tra cứu cùng mã, không gửi lệnh mới.' WHERE id=? AND status NOT IN ('PAID','FAILED')",id);
     }
-    public List<Long> pending(){return db.queryForList("SELECT withdrawal_id FROM withdrawal_payouts WHERE status IN ('SUBMITTING','PROCESSING','REVIEW') ORDER BY checked_at NULLS FIRST,id LIMIT 20",Long.class);}
+    public List<Long> pending(){return db.queryForList("SELECT withdrawal_id FROM withdrawal_payouts WHERE provider='PAYOS' AND status IN ('SUBMITTING','PROCESSING','REVIEW') ORDER BY checked_at NULLS FIRST,id LIMIT 20",Long.class);}
     public void complete(Map<String,Object> withdrawal,Map<String,Object> payout,String reference) {
         Object id=withdrawal.get("id"),wallet=withdrawal.get("balance_id"),amount=withdrawal.get("amount");
         db.insert("INSERT INTO wallet_transactions(balance_id,direction,bucket,transaction_type,amount,reference_id,idempotency_key) VALUES (?,'DEBIT','RESERVED','WITHDRAWAL',?,?,?)",wallet,amount,id,"withdraw:"+id+":paid");

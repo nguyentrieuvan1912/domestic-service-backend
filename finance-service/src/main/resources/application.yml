@@ -1,6 +1,15 @@
 server:
   port: ${SERVER_PORT:8084}
 payments:
+  sepay:
+    enabled: ${SEPAY_ENABLED:false}
+    api-token: ${SEPAY_API_TOKEN:}
+    webhook-secret: ${SEPAY_WEBHOOK_SECRET:}
+    bank-account-id: ${SEPAY_BANK_ACCOUNT_ID:}
+    source-account: ${SEPAY_SOURCE_ACCOUNT:}
+    source-name: ${SEPAY_SOURCE_NAME:}
+    tkp: ${SEPAY_TKP:}
+    public-url: ${SEPAY_PUBLIC_URL:}
   payout:
     enabled: ${PAYOS_PAYOUT_ENABLED:false}
     client-id: ${PAYOS_PAYOUT_CLIENT_ID:}

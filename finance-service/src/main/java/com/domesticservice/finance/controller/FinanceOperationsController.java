@@ -42,10 +42,16 @@ public class FinanceOperationsController {
         return ops.withdraw(token, b);
     }
 
+    @PostMapping("/staff/me/withdrawals/{id}/cancel")
+    public Map<String,Object> cancelWithdrawal(@RequestHeader(value="Authorization",required=false) String token,@PathVariable long id){return ops.cancelWithdrawal(token,id);}
+
     @GetMapping("/admin/bank-accounts")
     public List<Map<String, Object>> adminBanks(@RequestHeader(value = "Authorization", required = false) String token) {
         return ops.adminBanks(token);
     }
+
+    @GetMapping("/admin/bank-accounts/{id}/history")
+    public List<Map<String,Object>> bankHistory(@RequestHeader(value="Authorization",required=false) String token,@PathVariable long id){return ops.bankHistory(token,id);}
 
     @PatchMapping("/admin/bank-accounts/{id}")
     public Map<String, Object> verify(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id, @RequestBody Map<String, Object> b) {

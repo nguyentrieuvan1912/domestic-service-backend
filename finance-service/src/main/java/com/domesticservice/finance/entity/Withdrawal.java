@@ -62,6 +62,10 @@ public class Withdrawal {
     @Column(name = "transfer_reference", nullable = true, length = 160)
     private String transferReference;
 
+    @Column(name="cancelled_by") private Long cancelledBy;
+    @Column(name="cancelled_at") private Instant cancelledAt;
+    @Column(name="cancellation_reason",columnDefinition="text") private String cancellationReason;
+
     @Column(name = "rejection_reason", nullable = true, columnDefinition = "text")
     private String rejectionReason;
 

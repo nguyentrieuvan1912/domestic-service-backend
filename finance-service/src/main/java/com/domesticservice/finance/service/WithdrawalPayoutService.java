@@ -23,23 +23,31 @@ public class WithdrawalPayoutService {
     private final ServiceHttpClient identity;
     private final TransactionTemplate tx;
     private final ObjectMapper json;
+    private SepayDisbursementService manual;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void manualDisbursement(SepayDisbursementService manual){this.manual=manual;}
     public WithdrawalPayoutService(WithdrawalPayoutRepository repo,PayosPayoutClient provider,PayoutProperties config,
         PayoutBankDirectory directory,PlatformTransactionManager manager,ObjectMapper json,@Value("${clients.identity.base-url}") String identityUrl) {
         this.repo=repo;this.provider=provider;this.config=config;this.directory=directory;this.tx=new TransactionTemplate(manager);this.json=json;identity=new ServiceHttpClient(identityUrl);
     }
     public Map<String,Object> capabilities(String token) {
         identity.authenticate(token,"STAFF","ADMIN");
+        if(manual!=null && manual.enabled())return manual.capabilities();
         return Map.of("configured",config.ready(),"minimum",config.minimum(),"maximum",config.maximum(),"requiresAdminApproval",true,
             "automaticNameLookup",false,"message",config.ready()?"Kênh chi đã được cấu hình; mỗi yêu cầu cần duyệt và xác minh kết quả chuyển tiền.":"Chưa cấu hình đầy đủ Kênh chi payOS. Yêu cầu rút chưa thể chuyển tự động.");
     }
     public List<Map<String,Object>> banks(String token){identity.authenticate(token,"STAFF","ADMIN");return directory.banks();}
     public Map<String,Object> connection(String token) {
+        if(manual!=null && manual.enabled())return manual.connection(token);
         identity.authenticate(token,"ADMIN");var source=provider.source();
         String account=source.get("accountNumber").toString();
         return Map.of("verified",true,"currency","VND","balance",source.get("balance"),"accountName",source.get("accountName"),"accountLast4",account.substring(Math.max(0,account.length()-4)));
     }
     public Map<String,Object> dispatch(String token,long id,boolean confirmed) {
         long admin=ServiceHttpClient.userId(identity.authenticate(token,"ADMIN"));
+        var previous=repo.find(id);
+        if(previous!=null && "SEPAY".equals(previous.get("provider")))throw conflict("Yêu cầu đã khóa cho chuyển khoản TPBank. Không gửi chi payOS.");
+        if(previous==null && manual!=null && manual.enabled())throw conflict("Đang dùng TPBank/SePay. Mở QR chuyển khoản tại yêu cầu đã duyệt.");
         if(!confirmed) throw conflict("Cần xác nhận gửi lệnh chi thực tế.");
         provider.requireReady();
         var w=requireWithdrawal(id);
@@ -75,10 +83,13 @@ public class WithdrawalPayoutService {
     public Map<String,Object> refresh(String token,long id) {
         var user=identity.authenticate(token,"STAFF","ADMIN");var w=requireWithdrawal(id);
         if(!"ADMIN".equals(user.get("role")) && n(w,"staff_id")!=ServiceHttpClient.userId(user)) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Không tìm thấy yêu cầu rút của bạn.");
+        var existing=repo.find(id);
+        if(existing!=null && "SEPAY".equals(existing.get("provider")))return manual.refresh(token,id);
         return refreshInternal(id);
     }
     private Map<String,Object> refreshInternal(long id) {
         var p=repo.find(id);
+        if(p!=null && !"PAYOS".equals(p.get("provider")))throw conflict("Yêu cầu thuộc kênh TPBank/SePay. Không đối soát qua payOS.");
         if(p!=null && !List.of("PAID","FAILED").contains(p.get("status"))) {
             var proof=provider.find(p.get("reference_id").toString());
             if(proof!=null) reconcile(id,proof);
