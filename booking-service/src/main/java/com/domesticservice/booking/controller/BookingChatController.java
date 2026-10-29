@@ -33,4 +33,10 @@ public class BookingChatController {
     public Map<String, Object> read(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id, @RequestBody(required = false) Map<String, Object> body) {
         return service.read(token, id, body);
     }
+    @DeleteMapping("/{id}/trash")
+    @ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+    public void deletePermanently(@RequestHeader(value="Authorization",required=false) String token,@PathVariable long id) {
+        service.deletePermanently(token,id);
+    }
+
 }

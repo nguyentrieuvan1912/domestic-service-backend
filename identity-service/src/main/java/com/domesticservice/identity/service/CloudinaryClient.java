@@ -30,6 +30,30 @@ public class CloudinaryClient {
         params.put("allowed_formats",type.equals("image")?"jpg,jpeg,png,webp":"mp4,webm,mov");
         return Map.of("id",id,"uploadUrl","https://api.cloudinary.com/v1_1/"+config.cloudName()+"/"+type+"/upload","apiKey",config.apiKey(),"params",params,"signature",signature(params));
     }
+    public String uploadAvatar(String data, String publicId) {
+        if (!ready()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Chưa cấu hình Cloudinary để tải ảnh đại diện.");
+        Map<String,String> params = new TreeMap<>();
+        params.put("public_id", publicId);
+        params.put("timestamp", Long.toString(java.time.Instant.now().getEpochSecond()));
+        params.put("overwrite", "false");
+        params.put("allowed_formats", "jpg,jpeg,png");
+        var fields = new LinkedHashMap<>(params);
+        fields.put("signature", signature(params));
+        fields.put("api_key", config.apiKey());
+        fields.put("file", data);
+        String form = fields.entrySet().stream().map(e -> URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8) + "=" + URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8)).collect(Collectors.joining("&"));
+        try {
+            var request = HttpRequest.newBuilder(URI.create(base + "/v1_1/" + config.cloudName() + "/image/upload"))
+                .timeout(Duration.ofSeconds(10)).header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(form)).build();
+            var response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) throw unavailable();
+            var asset = json.readValue(response.body(), new TypeReference<Map<String,Object>>() {});
+            validate(asset, publicId, "image");
+            return asset.get("secure_url").toString();
+        } catch (java.io.IOException | tools.jackson.core.JacksonException | IllegalArgumentException e) { throw unavailable(); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); throw unavailable(); }
+    }
     String signature(Map<String,String> params){
         String body=new TreeMap<>(params).entrySet().stream().map(e->e.getKey()+"="+e.getValue()).collect(Collectors.joining("&"));
         try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest((body+config.apiSecret()).getBytes(StandardCharsets.UTF_8)));}

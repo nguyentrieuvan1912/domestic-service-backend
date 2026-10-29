@@ -25,6 +25,7 @@ import com.domesticservice.identity.dto.RegistrationResponse.Verified;
 public class AccountService {
 
     private final AccountSqlRepository repository;
+    private final AvatarService avatars;
 
     private final ObjectMapper json;
 
@@ -38,7 +39,8 @@ public class AccountService {
 
     private static final List<String> DOCUMENTS = List.of("Bản sao CCCD", "Hộ khẩu / KT3", "Giấy khám sức khỏe");
 
-    public AccountService(AccountSqlRepository repository, ObjectMapper json, RegistrationVerificationService verification) {
+    public AccountService(AccountSqlRepository repository, ObjectMapper json, RegistrationVerificationService verification, AvatarService avatars) {
+        this.avatars = avatars;
         this.repository = repository;
         this.json = json;
         this.verification = verification;
@@ -182,6 +184,7 @@ public class AccountService {
         } catch (DataIntegrityViolationException ex) {
             throw error(HttpStatus.CONFLICT, "Thông tin nhân viên đã được sử dụng.");
         }
+        avatars.save(id, body.avatar(), true);
         saveStaffDetails(id, body.dateOfBirth(), body.birthYear(), body.gender(), body.experienceYears(), body.bio());
         return profile(user(id));
     }
@@ -322,6 +325,7 @@ public class AccountService {
         } catch (DataIntegrityViolationException ex) {
             throw error(HttpStatus.CONFLICT, "CCCD đã thuộc về nhân viên khác.");
         }
+        avatars.save(staffId, request.avatar(), true);
         saveStaffDetails(staffId, Objects.toString(data.get("dateOfBirth"), ""), data.get("birthYear") instanceof Number n ? n.intValue() : null, null, data.get("experienceYears") instanceof Number n ? n.doubleValue() : null, null);
         data.put("staffId", staffId);
         data.put("rank", request.rank());
@@ -343,6 +347,7 @@ public class AccountService {
             throw error(HttpStatus.CONFLICT, "Số điện thoại đã được sử dụng.");
         }
         repository.updateStaffUpdateStaffs(request.rank(), id);
+        if (request.avatar() != null) avatars.save(id, request.avatar(), true);
         saveStaffDetails(id, request.dateOfBirth(), request.birthYear(), request.gender(), request.experienceYears(), request.bio());
     }
 

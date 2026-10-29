@@ -45,6 +45,15 @@ public class Conversation {
     @Column(name = "closed_at", nullable = true)
     private Instant closedAt;
 
+    @Column(name = "customer_trashed_at")
+    private Instant customerTrashedAt;
+
+    @Column(name = "customer_deleted_at")
+    private Instant customerDeletedAt;
+
+    @Column(name = "customer_deleted_through_id", nullable = false)
+    private Long customerDeletedThroughId = 0L;
+
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "booking_id", referencedColumnName = "id", insertable = false, updatable = false)
     private Booking booking;
