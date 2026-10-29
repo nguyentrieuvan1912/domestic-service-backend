@@ -1,5 +1,33 @@
 server:
   port: ${SERVER_PORT:8084}
+payments:
+  sepay:
+    enabled: ${SEPAY_ENABLED:false}
+    api-token: ${SEPAY_API_TOKEN:}
+    webhook-secret: ${SEPAY_WEBHOOK_SECRET:}
+    bank-account-id: ${SEPAY_BANK_ACCOUNT_ID:}
+    source-account: ${SEPAY_SOURCE_ACCOUNT:}
+    source-name: ${SEPAY_SOURCE_NAME:}
+    tkp: ${SEPAY_TKP:}
+    public-url: ${SEPAY_PUBLIC_URL:}
+  payout:
+    enabled: ${PAYOS_PAYOUT_ENABLED:false}
+    client-id: ${PAYOS_PAYOUT_CLIENT_ID:}
+    api-key: ${PAYOS_PAYOUT_API_KEY:}
+    checksum-key: ${PAYOS_PAYOUT_CHECKSUM_KEY:}
+    source-account: ${PAYOS_PAYOUT_SOURCE_ACCOUNT:}
+    source-name: ${PAYOS_PAYOUT_SOURCE_NAME:}
+    bank-bins: ${PAYOS_PAYOUT_BANK_BINS:}
+    minimum: ${PAYOS_PAYOUT_MINIMUM:50000}
+    maximum: ${PAYOS_PAYOUT_MAXIMUM:1000000}
+  payos:
+    enabled: ${PAYOS_ENABLED:false}
+    client-id: ${PAYOS_CLIENT_ID:}
+    api-key: ${PAYOS_API_KEY:}
+    checksum-key: ${PAYOS_CHECKSUM_KEY:}
+    account-number: ${PAYOS_ACCOUNT_NUMBER:}
+    return-url: ${PAYOS_RETURN_URL:}
+    cancel-url: ${PAYOS_CANCEL_URL:}
 spring:
   application:
     name: finance-service

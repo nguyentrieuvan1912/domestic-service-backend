@@ -48,6 +48,15 @@ public class StaffBankAccount {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    @Column(name = "verified_by")
+    private Long verifiedBy;
+
+    @Column(name = "verified_at")
+    private Instant verifiedAt;
+
+    @Column(name = "verification_note", columnDefinition = "text")
+    private String verificationNote;
+
     @OneToMany(mappedBy = "bankAccount", fetch = FetchType.LAZY)
     @Setter(AccessLevel.NONE)
     private Set<Withdrawal> withdrawalsByBankAccount = new LinkedHashSet<>();

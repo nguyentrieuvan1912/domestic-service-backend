@@ -4,6 +4,18 @@ Cập nhật 14/10/2026. Phần này mô tả code hiện có; các contract d�
 
 Prefix Gateway: `/api/v1/{identity|catalog|booking|finance|ai-assistant}`. ID entity là số BIGINT; adapter giao diện chuyển sang string. Các route được bảo vệ nhận `Authorization: Bearer <accessToken>` từ Identity, xác minh tài khoản còn ACTIVE và kiểm tra role tại service sở hữu. Không có đăng nhập bằng tài khoản fixture trong ứng dụng.
 
+## Phạm vi phục vụ
+
+Phạm vi phục vụ chỉ ở TP. Hồ Chí Minh. API tạo/cập nhật địa chỉ từ chối thành phố khác với HTTP 400, bao gồm địa chỉ theo quận/huyện cũ. Booking cũng kiểm tra lại thành phố khi tạo đơn hoặc tìm nhân viên, để địa chỉ đã lưu từ trước không vượt qua giới hạn này. Các đơn lịch sử giữ nguyên snapshot địa chỉ.
+
+## Đề xuất gói theo diện tích (Catalog)
+
+`GET /api/v1/catalog/services/{id}/recommendation?areaM2=80&maxStaffCount=20&maxDurationMinutes=720` là API đọc công khai. Trả `status` (`RECOMMENDED`, `NO_MATCH`, `UNSUPPORTED`), `options` tăng dần theo `baseAmount`, rồi số nhân viên, thời lượng; cùng `unconfiguredPackageIds` và giải thích. Mỗi phương án có `packageId`, `packageName`, `requiredStaffCount`, `quantity`, `baseAmount`, `durationMinutes`, `coveredAreaM2`. Câu trả lời `areaM2` được kiểm tra theo requirement của dịch vụ; các kích thước dạng văn bản chưa có định mức không được tự suy diễn.
+
+`service_packages.max_area` là định mức diện tích của một gói với một nhóm `default_staff_count` nhân viên. Phương án đề xuất dùng đủ nhóm; số lượng gói chỉ thay đổi với đơn vị ITEM. Định mức = `max_area × quantity × floor(requiredStaffCount/defaultStaffCount)`. Giá gói dùng đúng quy tắc quote hiện có: `base_price × quantity × ceil(requiredStaffCount/defaultStaffCount)`; thời lượng = `duration_minutes × quantity`, làm tròn lên bước 30 phút như quote. Diện tích là tổng diện tích cần làm, không nhân thêm số tầng. Quote/create kiểm tra không thiếu định mức với các gói đã cấu hình. Gói thiếu max_area vẫn được chọn thủ công theo luồng cũ nhưng không tham gia so sánh tối ưu. Chi phí đề xuất chưa gồm tiện ích, dịch vụ kèm và ưu đãi; số cuối cùng vẫn phải lấy quote của backend.
+
+Mode A truyền `maxStaffCount=1` và giới hạn thời lượng còn phù hợp lịch nhân viên/tiện ích. Mode B cho phép tối đa 20 người. Mobile tự áp dụng đề xuất khi diện tích thay đổi; đổi gói thủ công không bị ghi đè khi chỉ tải lại cùng diện tích. Web chỉ xem đề xuất; đặt/lưu lịch vẫn trên ứng dụng.
+
 ## Identity
 
 | Method / path sau prefix identity | Quyền | Chức năng |
@@ -137,9 +149,9 @@ AI có GET/POST `/conversations`, GET/POST `/conversations/{id}/messages`, DELET
 
 ## Mode A: thời hạn phản hồi lời mời (Booking V8)
 
-- Sau khi xác nhận giá, Booking lưu `staffResponseDeadline` (3 phút), `staffWaitState=WAITING`, `staffWaitRound=1`; `serverNow` dùng để đồng bộ đồng hồ client. Snapshot nhân viên được lưu ngay khi mời.
+- Sau khi xác nhận giá, Booking lưu `staffResponseDeadline` (5 phút), `staffWaitState=WAITING`, `staffWaitRound=1`; `serverNow` dùng để đồng bộ đồng hồ client. Snapshot nhân viên được lưu ngay khi mời.
 - Worker kiểm tra thời hạn mỗi giây; khóa cùng booking với thao tác nhận đơn. Lời mời hết hạn không thể claim, kể cả trước lượt chạy worker. Booking/assignment chuyển `CANCELLED` với lý do `Hết thời gian nhận đơn`, `staffWaitState=EXPIRED`. Cả hai bên nhận thông báo qua outbox Identity.
-- Customer `POST /api/v1/booking/bookings/{id}/staff-response` body `{ "action": "EXTEND" | "CANCEL" | "STOP", "round": 1 }`. Chỉ chủ đơn được thao tác trên lượt hết hạn. `EXTEND` kiểm tra lại điều kiện/lịch của nhân viên, tạo assignment mới, tăng lượt và thời hạn thêm 3 phút từ lúc xác nhận; vết hủy assignment/lịch sử trước được giữ. Gửi lại cùng lượt không tạo lời mời trùng. `CANCEL` đóng lựa chọn tìm nhân viên khác và giữ đơn hủy trong quản lý đơn. `STOP` đóng lựa chọn với lý do khách hủy đặt, không tiếp tục, rồi client về trang chủ. Cả hai thao tác chỉ điều hướng sau khi server xác nhận lưu. Mobile tìm lại bằng ID đơn sở hữu: tải lại địa chỉ, thời gian, gói, addon, cấu hình, câu trả lời, ghi chú và mã giảm giá từ snapshot; mở thẳng danh sách nhân viên, đánh dấu/khóa chọn người vừa hết hạn. Báo giá, lịch rảnh và điều kiện mã được kiểm tra lại, không dùng lại quote hay request key của đơn cũ. Đơn đã được nhận không thể hủy qua endpoint này.
+- Customer `POST /api/v1/booking/bookings/{id}/staff-response` body `{ "action": "EXTEND" | "CANCEL" | "STOP", "round": 1 }`. Chỉ chủ đơn được thao tác trên lượt hết hạn. `EXTEND` kiểm tra lại điều kiện/lịch của nhân viên, tạo assignment mới, tăng lượt và thời hạn thêm 5 phút từ lúc xác nhận; vết hủy assignment/lịch sử trước được giữ. Gửi lại cùng lượt không tạo lời mời trùng. `CANCEL` đóng lựa chọn tìm nhân viên khác và giữ đơn hủy trong quản lý đơn. `STOP` đóng lựa chọn với lý do khách hủy đặt, không tiếp tục, rồi client về trang chủ. Cả hai thao tác chỉ điều hướng sau khi server xác nhận lưu. Mobile tìm lại bằng ID đơn sở hữu: tải lại địa chỉ, thời gian, gói, addon, cấu hình, câu trả lời, ghi chú và mã giảm giá từ snapshot; mở thẳng danh sách nhân viên, đánh dấu/khóa chọn người vừa hết hạn. Báo giá, lịch rảnh và điều kiện mã được kiểm tra lại, không dùng lại quote hay request key của đơn cũ. Đơn đã được nhận không thể hủy qua endpoint này.
 - `staffWaitState=CLOSED` khi nhân viên nhận, khách chọn không chờ hoặc đã qua giờ làm. Client chỉ hiện thẻ chờ với Mode A `STAFF_ASSIGNED/WAITING` hoặc `CANCELLED/EXPIRED`. Nhấn thẻ mở `/booking/waiting?id=...`; quay về không đặt lại đồng hồ.
 - Staff assignments bao gồm lời mời hết hạn chưa từng nhận, trả thêm `cancellationReason`, `responseTimedOut`. Chỉ lịch sử/thông tin cần thiết, không coi lời mời hết hạn là thu nhập đã phát sinh. Web quản lý đơn đọc trạng thái/lý do và lịch sử từ API đang có.
 
@@ -163,3 +175,9 @@ Claim tạo conversation cùng transaction với assignment. Mobile làm mới h
 Gửi TEXT tạo message và outbox CHAT_MESSAGE cùng transaction; lặp clientKey không thêm message/notification. Worker Identity chỉ gửi cho người nhận với eventKey chat-message:{messageId}, type CHAT_MESSAGE, data {bookingId,conversationId,messageId}. Không gửi nội dung chat riêng trong preview chuông. Mobile nhấn thông báo mở đúng /chat/[id]; server vẫn kiểm tra thành viên hội thoại. Chưa có push OS, luồng này là hộp thư/chuông trong ứng dụng đang chạy.
 
 PATCH /conversations/{id}/read nhận body tùy chọn {throughMessageId:<id tin lớn nhất đã tải>} và trả {changed,unreadCount}. Giới hạn này giữ tin đến sau lần tải ở trạng thái chưa đọc. Client cũ không gửi body giữ hành vi đọc toàn bộ. Tin đã gửi của mình không cộng vào badge. Danh sách conversations gom lastMessage và hai bộ đếm trong một truy vấn SQL, không gọi thêm ba truy vấn cho từng hội thoại.
+
+### Đặt lại nhanh (20/10/2026)
+- Mobile mở đơn nguồn bằng API detail có kiểm tra chủ sở hữu; giữ service/package, số lượng, cấu hình/câu trả lời, địa chỉ, addon, dịch vụ liên quan và ghi chú. Không dùng lại quote ID/request key của đơn cũ.
+- Ba giờ gợi ý và giờ tự chọn tuân thủ cửa sổ 7 ngày, cách hiện tại 2 giờ và kết thúc trước 20:00. Preview/giá mới vẫn lấy từ Catalog. Khi thêm addon, kiểm tra lại toàn bộ thời lượng.
+- Giữ nhân viên cũ hoặc chọn nhân viên khác dùng Mode A (một nhân viên), giao của các kết quả `/customer/staff` cho dịch vụ chính và dịch vụ liên quan; Mode B đăng việc cho nhân viên phù hợp tự nhận. Create vẫn kiểm tra lại trong khóa giao dịch, tránh lịch trùng khi hai khách đặt cùng lúc.
+- Chờ Mode A tối đa 5 phút cho lời mời mới và gia hạn mới. Sau hết hạn, khách có thể giữ đơn cũ trong lịch sử rồi đặt lại trên cùng màn hình với hai lựa chọn chọn người khác/hệ thống ghép, khóa người vừa hết hạn. Nhân viên từ chối cũng có hai lựa chọn này. Không tự tạo đơn thay thế hoặc hủy đơn đã nhận.

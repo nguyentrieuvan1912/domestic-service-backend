@@ -52,12 +52,12 @@ public class CustomerDataService {
         String district = Objects.toString(body.district(), "").strip();
         String ward = java.text.Normalizer.normalize(Objects.toString(body.ward(), "").strip(), java.text.Normalizer.Form.NFC);
         String province = body.city().strip();
+        if (!List.of("TP. Hồ Chí Minh", "Thành phố Hồ Chí Minh", "Hồ Chí Minh").contains(province))
+            throw error(HttpStatus.BAD_REQUEST, "Hiện chỉ hỗ trợ địa chỉ tại TP. Hồ Chí Minh.");
+        province = "TP. Hồ Chí Minh";
         if (district.isBlank()) {
             if (ward.isBlank())
                 throw error(HttpStatus.BAD_REQUEST, "Vui lòng chọn phường/xã.");
-            if (!List.of("TP. Hồ Chí Minh", "Thành phố Hồ Chí Minh", "Hồ Chí Minh").contains(province))
-                throw error(HttpStatus.BAD_REQUEST, "Danh mục phường/xã hiện hỗ trợ TP. Hồ Chí Minh.");
-            province = "TP. Hồ Chí Minh";
             if (!Boolean.TRUE.equals(repository.saveAddressExistsAdministrativeUnits(Boolean.class, province, ward)))
                 throw error(HttpStatus.BAD_REQUEST, "Vui lòng chọn phường/xã hợp lệ trong danh sách TP. Hồ Chí Minh.");
         }

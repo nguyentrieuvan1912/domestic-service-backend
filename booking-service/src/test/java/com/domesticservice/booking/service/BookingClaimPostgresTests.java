@@ -33,7 +33,7 @@ class BookingClaimPostgresTests {
     @Profile("booking-claim-verification")
     @EnableAutoConfiguration
     @EntityScan("com.domesticservice.booking.entity")
-    @Import({NativeQueryExecutor.class,BookingOperationsSqlRepository.class,BookingWorkflowSqlRepository.class,BookingWorkflowService.class})
+    @Import({NativeQueryExecutor.class,BookingOperationsSqlRepository.class,BookingWorkflowSqlRepository.class,BookingWorkflowService.class,BookingCreationSqlRepository.class,StaffResponseSqlRepository.class})
     static class Config {
         @Bean(destroyMethod="stop") IdentityPeer identityPeer() throws Exception { return new IdentityPeer(); }
         @Bean BookingOperationsService operations(BookingOperationsSqlRepository repository, ObjectMapper json, IdentityPeer peer) {
@@ -109,6 +109,21 @@ class BookingClaimPostgresTests {
         }
     }
     long accepted(long id){return db.queryForObject("SELECT count(*) FROM booking_assignments WHERE booking_id=? AND status='ACCEPTED'",Long.class,id);}
+
+    @Autowired BookingCreationSqlRepository creationRepository;
+    @Autowired StaffResponseSqlRepository responseRepository;
+
+    @Test void initialAndRenewedInvitationWindowsAreFiveMinutes() {
+        long id=booking(1);
+        db.update("UPDATE bookings SET booking_mode='MODE_A' WHERE id=?",id);
+        creationRepository.createUpdateBookings(id);
+        Double initial=db.queryForObject("SELECT extract(epoch FROM (staff_response_deadline-clock_timestamp())) FROM bookings WHERE id=?",Double.class,id);
+        assertNotNull(initial);assertTrue(initial>295 && initial<=300,"Initial deadline must be five minutes");
+        responseRepository.decideUpdateBookings2(id);
+        Double renewed=db.queryForObject("SELECT extract(epoch FROM (staff_response_deadline-clock_timestamp())) FROM bookings WHERE id=?",Double.class,id);
+        assertNotNull(renewed);assertTrue(renewed>295 && renewed<=300,"Renewal deadline must be five minutes");
+        assertEquals(2,db.queryForObject("SELECT staff_wait_round FROM bookings WHERE id=?",Integer.class,id));
+    }
 
     @Test void twoStaffRaceForOnePosition() throws Exception {
         long id=booking(1);

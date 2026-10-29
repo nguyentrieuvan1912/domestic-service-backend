@@ -54,7 +54,7 @@ public class BookingCreationSqlRepository {
     }
 
     public int createUpdateBookings(Object... args) {
-        return db.update("UPDATE bookings SET pricing_confirmed=true,staff_response_deadline=CASE WHEN booking_mode='MODE_A' THEN now()+interval '3 minutes' END,staff_wait_state=CASE WHEN booking_mode='MODE_A' THEN 'WAITING' END,staff_wait_round=CASE WHEN booking_mode='MODE_A' THEN 1 ELSE 0 END WHERE id=?", args);
+        return db.update("UPDATE bookings SET pricing_confirmed=true,staff_response_deadline=CASE WHEN booking_mode='MODE_A' THEN now()+interval '5 minutes' END,staff_wait_state=CASE WHEN booking_mode='MODE_A' THEN 'WAITING' END,staff_wait_round=CASE WHEN booking_mode='MODE_A' THEN 1 ELSE 0 END WHERE id=?", args);
     }
 
     public int createUpdateOutboxEvents(Object... args) {

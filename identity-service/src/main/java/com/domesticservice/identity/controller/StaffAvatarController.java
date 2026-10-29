@@ -32,8 +32,13 @@ public class StaffAvatarController {
         }
     }
 
-    @GetMapping(value = "/api/v1/identity/staff-avatar.png", produces = MediaType.IMAGE_PNG_VALUE)
-    public ResponseEntity<byte[]> get() {
+    @GetMapping(value = {"/api/v1/identity/staff-avatar.png", "/api/v1/identity/default-avatar.png"}, produces = MediaType.IMAGE_PNG_VALUE)
+    public ResponseEntity<byte[]> get(jakarta.servlet.http.HttpServletRequest request) throws java.io.IOException {
+        if (request.getRequestURI().endsWith("/default-avatar.png")) {
+            try (var input = getClass().getResourceAsStream("/default-avatar.png")) {
+                return ResponseEntity.ok().cacheControl(CacheControl.maxAge(java.time.Duration.ofDays(1))).body(input.readAllBytes());
+            }
+        }
         return ResponseEntity.ok().cacheControl(CacheControl.maxAge(java.time.Duration.ofDays(1))).body(AVATAR);
     }
 }

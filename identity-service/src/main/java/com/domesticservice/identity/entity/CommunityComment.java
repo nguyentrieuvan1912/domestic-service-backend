@@ -32,8 +32,22 @@ public class CommunityComment {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
+    @Column(name="parent_id")
+    private Long parentId;
+    @Column(name="request_key",length=160)
+    private String requestKey;
+    @ManyToOne(fetch=FetchType.LAZY)
+    @JoinColumn(name="parent_id",insertable=false,updatable=false)
+    private CommunityComment parent;
+
     @Column(name = "content", nullable = false, columnDefinition = "text")
     private String content;
+    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
+    @Column(name="media_urls",nullable=false,columnDefinition="jsonb")
+    private List<Map<String,Object>> mediaUrls;
+    @Column(name="deleted_at") private Instant deletedAt;
+    @Column(name="deleted_by") private Long deletedBy;
+    @ManyToOne(fetch=FetchType.LAZY) @JoinColumn(name="deleted_by",insertable=false,updatable=false) private User deletedByUser;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;

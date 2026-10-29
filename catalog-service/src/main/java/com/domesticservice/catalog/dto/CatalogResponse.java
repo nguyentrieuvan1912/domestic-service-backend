@@ -32,4 +32,7 @@ public final class CatalogResponse {
 
     public record Page(List<ServiceSummary> items, long total, int page, int size, long totalPages) {
     }
+
+    public record PackageSuggestion(long packageId, String packageName, int requiredStaffCount, int quantity, long baseAmount, int durationMinutes, BigDecimal coveredAreaM2) {}
+    public record PackageRecommendation(String status, BigDecimal areaM2, List<PackageSuggestion> options, List<Long> unconfiguredPackageIds, String message) {}
 }

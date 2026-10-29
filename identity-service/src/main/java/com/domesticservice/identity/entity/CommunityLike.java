@@ -30,6 +30,9 @@ public class CommunityLike {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
+    @Column(nullable=false,length=12)
+    private String reaction;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 

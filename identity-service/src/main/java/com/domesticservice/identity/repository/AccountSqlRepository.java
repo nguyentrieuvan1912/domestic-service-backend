@@ -90,7 +90,7 @@ public class AccountSqlRepository {
             result.put("email", user.email());
             result.put("role", user.role());
             result.put("status", user.status());
-            result.put("avatar", Objects.toString(rs.getString("avatar_url"), ""));
+            result.put("avatar", Objects.toString(rs.getString("avatar_url"), com.domesticservice.identity.service.AvatarService.DEFAULT));
             result.put("createdAt", rs.getTimestamp("created_at").toInstant().toString());
             result.put("gender", rs.getString(user.role().equals("CUSTOMER") ? "customer_gender" : "staff_gender"));
             var dob = rs.getDate(user.role().equals("CUSTOMER") ? "customer_dob" : "staff_dob");

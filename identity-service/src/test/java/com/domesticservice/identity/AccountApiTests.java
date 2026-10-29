@@ -25,8 +25,17 @@ class AccountApiTests {
     @Autowired JdbcTemplate db;
     @Autowired ObjectMapper json;
     final HttpClient client=HttpClient.newHttpClient();
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.domesticservice.identity.service.CloudinaryClient cloud;
+    String avatarData() throws Exception {
+        try (var in=getClass().getResourceAsStream("/default-avatar.png")) {
+            return "data:image/png;base64,"+Base64.getEncoder().encodeToString(in.readAllBytes());
+        }
+    }
     String admin;
     @BeforeEach void setup() throws Exception {
+        org.mockito.Mockito.when(cloud.uploadAvatar(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+            .thenAnswer(call -> "https://res.cloudinary.com/test/image/upload/"+call.getArgument(1)+".png");
         accounts.bootstrap("admin@test.invalid","0900000001","AdminTest!123");
         admin=token(request("POST","/auth/login",Map.of("identifier","admin@test.invalid","password","AdminTest!123"),null));
     }
@@ -41,6 +50,10 @@ class AccountApiTests {
                 email,UUID.randomUUID().toString(),"test-fixture",com.domesticservice.identity.service.RegistrationVerificationService.digest(proof),java.sql.Timestamp.from(java.time.Instant.now().plusSeconds(1200)));
             input.put("verificationToken",proof); body=input;
         }
+        if ("POST".equals(method) && (path.endsWith("/staff-account") || path.equals("/admin/staff")) && body instanceof Map<?,?> values && !values.containsKey("avatar")) {
+            var withAvatar=new LinkedHashMap<String,Object>(); values.forEach((k,v)->withAvatar.put(k.toString(),v));
+            withAvatar.put("avatar",avatarData()); body=withAvatar;
+        }
         var builder=HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/api/v1/identity"+path))
             .header("Content-Type","application/json");
         if (token!=null) builder.header("Authorization","Bearer "+token);
@@ -49,6 +62,55 @@ class AccountApiTests {
     }
     String token(HttpResponse<String> response) { assertThat(response.statusCode()).isBetween(200,201); return json.readTree(response.body()).get("accessToken").asText(); }
     Map<String,Object> registration() { return Map.of("fullName","Khách thử nghiệm","phone","0900000002","email","customer@test.invalid","password","Customer!123","role","ADMIN"); }
+    @Test void avatarsPersistOnlyAfterCloudSuccessAndEnforceStaffPolicy() throws Exception {
+        String customer=token(request("POST","/auth/register",registration(),null));
+        assertThat(request("PATCH","/auth/avatar",Map.of("avatar",avatarData()),null).statusCode()).isEqualTo(401);
+        assertThat(request("PATCH","/auth/avatar",Map.of("avatar","https://untrusted.invalid/image.png"),customer).statusCode()).isEqualTo(400);
+        assertThat(request("PATCH","/auth/avatar",Map.of("avatar","data:image/png;base64,YmFk"),customer).statusCode()).isEqualTo(400);
+        var changed=request("PATCH","/auth/avatar",Map.of("avatar",avatarData()),customer);
+        assertThat(changed.statusCode()).isEqualTo(200);
+        String url=json.readTree(changed.body()).get("avatar").asText();
+        assertThat(url).startsWith("https://res.cloudinary.com/");
+        assertThat(db.queryForObject("SELECT avatar_url FROM users WHERE role='CUSTOMER'",String.class)).isEqualTo(url);
+        org.mockito.Mockito.when(cloud.uploadAvatar(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString()))
+            .thenThrow(new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,"Cloudinary unavailable"));
+        assertThat(request("PATCH","/auth/avatar",Map.of("avatar",avatarData()),customer).statusCode()).isEqualTo(503);
+        assertThat(db.queryForObject("SELECT avatar_url FROM users WHERE role='CUSTOMER'",String.class)).isEqualTo(url);
+        assertThat(request("PATCH","/auth/avatar",Map.of("avatar",""),customer).body()).contains("default-avatar.png");
+        assertThat(db.queryForObject("SELECT avatar_url FROM users WHERE role='CUSTOMER'",String.class)).isEqualTo("/api/v1/identity/default-avatar.png");
+        long candidateId=candidate(); evaluate(candidateId);
+        assertThat(request("POST","/admin/candidates/"+candidateId+"/staff-account",Map.of("password","StaffTest!123","rank","STANDARD","avatar",""),admin).statusCode()).isEqualTo(400);
+        assertThat(db.queryForObject("SELECT count(*) FROM users WHERE role='STAFF'",Integer.class)).isZero();
+        org.mockito.Mockito.doReturn("https://res.cloudinary.com/test/image/upload/staff.png").when(cloud).uploadAvatar(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString());
+        var created=request("POST","/admin/candidates/"+candidateId+"/staff-account",Map.of("password","StaffTest!123","rank","STANDARD"),admin);
+        assertThat(created.statusCode()).isEqualTo(201);
+        long staffId=json.readTree(created.body()).get("staffId").asLong();
+        String staff=token(request("POST","/auth/login",Map.of("identifier","staff@test.invalid","password","StaffTest!123"),null));
+        assertThat(request("PATCH","/auth/avatar",Map.of("avatar",avatarData()),staff).statusCode()).isEqualTo(403);
+        assertThat(request("PATCH","/auth/avatar",Map.of("avatar",""),staff).statusCode()).isEqualTo(403);
+        var update=new LinkedHashMap<String,Object>(Map.of("fullName","Nhân viên","phone","0900000003","status","ACTIVE","rank","STANDARD","avatar",avatarData()));
+        assertThat(request("PATCH","/admin/staff/"+staffId,update,customer).statusCode()).isEqualTo(403);
+        assertThat(request("PATCH","/admin/staff/"+staffId,update,admin).statusCode()).isEqualTo(204);
+        update.put("avatar", "");
+        assertThat(request("PATCH","/admin/staff/"+staffId,update,admin).statusCode()).isEqualTo(400);
+        assertThat(request("GET","/auth/profile",null,staff).body()).contains("https://res.cloudinary.com/test/image/upload/staff.png");
+    }
+
+    @Test void customerAddressesRejectOutsideHcmEvenWithLegacyDistrict() throws Exception {
+        String customer=token(request("POST","/auth/register",registration(),null));
+        var body=new LinkedHashMap<String,Object>(Map.of("title","Nhà riêng","recipientName","Người nhận","recipientPhone","0900000002","streetAddress","123 Đường thử","district","Quận 1","city","Hà Nội"));
+        assertThat(request("POST","/customer/addresses",body,customer).statusCode()).isEqualTo(400);
+        assertThat(db.queryForObject("SELECT count(*) FROM addresses",Integer.class)).isZero();
+        body.put("city","Thành phố Hồ Chí Minh");
+        var saved=request("POST","/customer/addresses",body,customer);
+        assertThat(saved.statusCode()).isEqualTo(201);
+        assertThat(json.readTree(saved.body()).get("city").asText()).isEqualTo("TP. Hồ Chí Minh");
+        long id=json.readTree(saved.body()).get("id").asLong();
+        body.put("city","Đà Nẵng");
+        assertThat(request("PUT","/customer/addresses/"+id,body,customer).statusCode()).isEqualTo(400);
+        assertThat(db.queryForObject("SELECT province FROM addresses WHERE id=?",String.class,id)).isEqualTo("TP. Hồ Chí Minh");
+    }
+
     @Test void customerAddressesPersistAndEnforceOwnership() throws Exception {
         String customer=token(request("POST","/auth/register",registration(),null));
         String other=token(request("POST","/auth/register",Map.of("fullName","Khách khác","phone","0900000010","email","other@test.invalid","password","Customer!123"),null));
@@ -147,10 +209,10 @@ class AccountApiTests {
         assertThat(db.queryForObject("SELECT count(*) FROM staffs",Integer.class)).isEqualTo(1);
         String staff=token(request("POST","/auth/login",Map.of("identifier","staff@test.invalid","password","StaffTest!123"),null));
         assertThat(request("GET","/auth/profile",null,staff).body()).contains("Ứng viên thử nghiệm","STAFF");
-        assertThat(request("GET","/auth/profile",null,staff).body()).contains("1998-06-18","staff-avatar.png");
+        assertThat(request("GET","/auth/profile",null,staff).body()).contains("1998-06-18","https://res.cloudinary.com/test/image/upload/cleanmaster/avatars/");
         assertThat(db.queryForObject("SELECT birth_year FROM staffs",Integer.class)).isEqualTo(1998);
         assertThat(db.queryForObject("SELECT experience_years FROM staffs",Integer.class)).isEqualTo(3);
-        assertThat(request("GET","/staff-directory",null,null).body()).contains("1998-06-18","staff-avatar.png");
+        assertThat(request("GET","/staff-directory",null,null).body()).contains("1998-06-18","https://res.cloudinary.com/test/image/upload/cleanmaster/avatars/");
         assertThat(request("PATCH","/customer/profile",Map.of("fullName","Không được sửa","phone","0900000003"),staff).statusCode()).isEqualTo(403);
         assertThat(request("PATCH","/staff/profile",Map.of("phone","0900000003","bio","Thông tin lưu thật"),staff).statusCode()).isEqualTo(200);
         assertThat(request("GET","/auth/profile",null,staff).body()).contains("Thông tin lưu thật");

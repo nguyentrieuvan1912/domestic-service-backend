@@ -34,7 +34,7 @@ public class FinanceOperationsSqlRepository {
     }
 
     public List<Map<String, Object>> walletFindWithdrawals(Object... args) {
-        return db.queryForList("SELECT id,amount,status,requested_at AS \"requestedAt\",rejection_reason AS \"rejectionReason\" FROM withdrawals WHERE staff_id=? ORDER BY id DESC", args);
+        return db.queryForList("SELECT w.id,w.amount,w.status,w.requested_at AS \"requestedAt\",w.rejection_reason AS \"rejectionReason\",w.cancellation_reason AS \"cancellationReason\",w.cancelled_at AS \"cancelledAt\",w.cancelled_by AS \"cancelledBy\",p.provider AS \"payoutProvider\",p.status AS \"payoutStatus\",p.message AS \"payoutMessage\" FROM withdrawals w LEFT JOIN withdrawal_payouts p ON p.withdrawal_id=w.id WHERE w.staff_id=? ORDER BY w.id DESC", args);
     }
 
     public List<Map<String, Object>> banksFindStaffBankAccounts(Object... args) {
@@ -82,20 +82,33 @@ public class FinanceOperationsSqlRepository {
     }
 
     public List<Map<String, Object>> adminBanksFindStaffBankAccounts(Object... args) {
-        return db.queryForList("SELECT id,staff_id AS \"staffId\",bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",status FROM staff_bank_accounts ORDER BY id DESC", args);
+        return db.queryForList("SELECT id,staff_id AS \"staffId\",bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",status,verified_at AS \"verifiedAt\",verified_by AS \"verifiedBy\",(SELECT r.admin_name FROM bank_account_reviews r WHERE r.bank_account_id=staff_bank_accounts.id ORDER BY r.id DESC LIMIT 1) AS \"verifiedByName\",verification_note AS \"verificationNote\" FROM staff_bank_accounts ORDER BY id DESC", args);
+    }
+
+    public boolean withdrawalHasPayout(long id){return Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM withdrawal_payouts WHERE withdrawal_id=?)",Boolean.class,id));}
+    public int releaseCancelledWithdrawal(long balance,long staff,long amount){return db.update("UPDATE staff_balances SET reserved_balance=reserved_balance-?,available_balance=available_balance+?,version=version+1,updated_at=now() WHERE id=? AND staff_id=? AND reserved_balance>=?",amount,amount,balance,staff,amount);}
+    public int cancelPendingWithdrawal(long id,long staff){return db.update("UPDATE withdrawals SET status='CANCELLED',cancelled_by=?,cancelled_at=now(),cancellation_reason='Nhân viên hủy yêu cầu trước khi Admin duyệt.' WHERE id=? AND staff_id=? AND status='PENDING'",staff,id,staff);}
+
+    public List<Map<String,Object>> bankForReview(long id){return db.queryForList("SELECT * FROM staff_bank_accounts WHERE id=? FOR UPDATE",id);}
+    public List<Map<String,Object>> bankReviewHistory(long id){return db.queryForList("SELECT id,admin_id AS \"adminId\",admin_name AS \"adminName\",old_status AS \"oldStatus\",new_status AS \"newStatus\",bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",verification_note AS \"verificationNote\",legacy,reviewed_at AS \"reviewedAt\" FROM bank_account_reviews WHERE bank_account_id=? ORDER BY id DESC",id);}
+    public long insertBankReview(Map<String,Object> bank,long admin,String adminName,String status,String note){
+        return insert("INSERT INTO bank_account_reviews(bank_account_id,staff_id,admin_id,admin_name,old_status,new_status,bank_code,account_number,account_holder,verification_note) VALUES (?,?,?,?,?,?,?,?,?,?)",
+          bank.get("id"),bank.get("staff_id"),admin,adminName,bank.get("status"),status,bank.get("bank_code"),bank.get("account_number"),bank.get("account_holder"),note);
     }
 
     public int verifyBankUpdateStaffBankAccounts(Object... args) {
-        return db.update("UPDATE staff_bank_accounts SET status=? WHERE id=?", args);
+        return db.update("UPDATE staff_bank_accounts SET status=?,verification_note=?,verified_by=?,verified_at=now() WHERE id=?", args);
     }
 
     public List<Map<String, Object>> withdrawalsFindWithdrawals(Object... args) {
-        return db.queryForList("SELECT id,staff_id AS \"staffId\",amount,status,requested_at AS \"requestedAt\",approved_at AS \"approvedAt\",bank_account_snapshot::text AS \"bankAccount\",rejection_reason AS \"rejectionReason\" FROM withdrawals ORDER BY id DESC", args);
+        return db.queryForList("SELECT w.id,w.staff_id AS \"staffId\",w.amount,w.status,w.requested_at AS \"requestedAt\",w.approved_at AS \"approvedAt\",w.bank_account_snapshot::text AS \"bankAccount\",w.rejection_reason AS \"rejectionReason\",w.cancellation_reason AS \"cancellationReason\",w.cancelled_at AS \"cancelledAt\",w.cancelled_by AS \"cancelledBy\",p.provider AS \"payoutProvider\",p.status AS \"payoutStatus\",p.message AS \"payoutMessage\" FROM withdrawals w LEFT JOIN withdrawal_payouts p ON p.withdrawal_id=w.id ORDER BY w.id DESC", args);
     }
 
     public List<Map<String, Object>> reviewWithdrawalFindWithdrawalsForUpdate(Object... args) {
         return db.queryForList("SELECT * FROM withdrawals WHERE id=? FOR UPDATE", args);
     }
+
+    public List<Map<String,Object>> reviewWithdrawalFindWithdrawals(Object... args){return db.queryForList("SELECT staff_id FROM withdrawals WHERE id=?",args);}
 
     public int reviewWithdrawalUpdateStaffBalances(Object... args) {
         return db.update("UPDATE staff_balances SET reserved_balance=reserved_balance-?,available_balance=available_balance+?,version=version+1,updated_at=now() WHERE id=?", args);

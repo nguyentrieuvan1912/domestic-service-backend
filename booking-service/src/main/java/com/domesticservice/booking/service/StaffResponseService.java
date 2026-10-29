@@ -100,11 +100,11 @@ public class StaffResponseService {
                     if (!flow.eligibility(staff, extra, profile).isEmpty())
                         throw error(HttpStatus.CONFLICT, "Nhân viên không còn đủ điều kiện thực hiện dịch vụ bổ sung. Vui lòng tìm nhân viên khác.");
                 }
-                if (((Timestamp) b.get("starts_at")).toInstant().isBefore(Instant.now().plusSeconds(180)))
-                    throw error(HttpStatus.CONFLICT, "Không còn đủ 3 phút trước giờ làm. Vui lòng đặt lại thời gian khác.");
+                if (((Timestamp) b.get("starts_at")).toInstant().isBefore(Instant.now().plusSeconds(300)))
+                    throw error(HttpStatus.CONFLICT, "Không còn đủ 5 phút trước giờ làm. Vui lòng đặt lại thời gian khác.");
                 repository.decideInsertBookingAssignments(id, staff, Objects.toString(assignment.get("staff_snapshot"), "{}"));
                 repository.decideUpdateBookings2(id);
-                flow.transition(b, "STAFF_ASSIGNED", customer, "CUSTOMER", "Khách hàng xác nhận chờ thêm 3 phút.");
+                flow.transition(b, "STAFF_ASSIGNED", customer, "CUSTOMER", "Khách hàng xác nhận chờ thêm 5 phút.");
             }
             return flow.bookingView(repository.decideFindBookings2(id));
         });

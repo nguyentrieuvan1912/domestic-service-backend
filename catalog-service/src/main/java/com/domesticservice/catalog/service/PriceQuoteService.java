@@ -93,6 +93,7 @@ public class PriceQuoteService {
             related.add(Map.of("id", id, "name", s.name(), "price", s.basePrice(), "durationMinutes", s.estimatedDurationMinutes()));
         }
         var answers = ServiceQuestionnaireValidator.validate(detail.requirements(), body.get("answers"));
+        PackageRecommendationService.validateCapacity(detail, pack, answers, quantity, count);
         long discount = 0;
         Long promotionId = null;
         String code = Objects.toString(body.get("promotionCode"), "").strip().toUpperCase(Locale.ROOT);

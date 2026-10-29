@@ -54,6 +54,7 @@ public class BookingCreationService {
             throw error(HttpStatus.BAD_REQUEST, "Hình thức đặt không hợp lệ.");
         long addressId = num(body, "addressId", 0, 1, Long.MAX_VALUE);
         var address = ops.identityClient().get("/api/v1/identity/customer/addresses/" + addressId, token);
+        requireSupportedAddress(address);
         @SuppressWarnings("unchecked")
         var quote = (Map<String, Object>) ops.catalogClient().call("POST", "/api/v1/catalog/quotes", token, body);
         Instant end = start.plusSeconds(((Number) quote.get("durationMinutes")).longValue() * 60);
@@ -129,6 +130,7 @@ public class BookingCreationService {
         Instant end = start.plusSeconds(minutes * 60L);
         validateWindow(start, end, true);
         var address = ops.identityClient().get("/api/v1/identity/customer/addresses/" + addressId, token);
+        requireSupportedAddress(address);
         var catalog = ops.services(token);
         if (service != null && !catalog.containsKey(service))
             throw error(HttpStatus.BAD_REQUEST, "Dịch vụ không khả dụng.");
@@ -184,6 +186,12 @@ public class BookingCreationService {
 
     private Map<String, Object> candidate(long service, Instant start, Instant end, Map<String, Object> address) {
         return Map.of("id", -1L, "service_id", service, "starts_at", Timestamp.from(start), "ends_at", Timestamp.from(end), "address_snapshot", json.writeValueAsString(address), "required_staff_count", 1, "booking_mode", "MODE_B");
+    }
+
+    static void requireSupportedAddress(Map<String, Object> address) {
+        String province = Objects.toString(address.getOrDefault("city", address.get("province")), "");
+        if (!"ho chi minh".equals(BookingOperationsService.city(province)))
+            throw error(HttpStatus.BAD_REQUEST, "Hiện chỉ nhận đặt dịch vụ tại TP. Hồ Chí Minh.");
     }
 
     static String digest(String value) {

@@ -18,10 +18,13 @@ public class FinanceOperationsService {
     private final ObjectMapper json;
 
     private final ServiceHttpClient identity, booking;
+    private final PayoutBankDirectory payoutBanks;
+    private final com.domesticservice.finance.config.PayoutProperties payoutConfig;
 
-    public FinanceOperationsService(FinanceOperationsSqlRepository repository, ObjectMapper json, @Value("${clients.identity.base-url}") String identityUrl, @Value("${clients.booking.base-url}") String bookingUrl) {
+    public FinanceOperationsService(FinanceOperationsSqlRepository repository, ObjectMapper json, @Value("${clients.identity.base-url}") String identityUrl, @Value("${clients.booking.base-url}") String bookingUrl, PayoutBankDirectory payoutBanks, com.domesticservice.finance.config.PayoutProperties payoutConfig) {
         this.repository = repository;
         this.json = json;
+        this.payoutBanks=payoutBanks; this.payoutConfig=payoutConfig;
         identity = new ServiceHttpClient(identityUrl);
         booking = new ServiceHttpClient(bookingUrl);
     }
@@ -67,16 +70,27 @@ public class FinanceOperationsService {
 
     public List<Map<String, Object>> banks(String token) {
         long staff = ServiceHttpClient.userId(identity.authenticate(token, "STAFF"));
-        return repository.banksFindStaffBankAccounts(staff);
+        return withBankNames(repository.banksFindStaffBankAccounts(staff));
+    }
+
+    private List<Map<String,Object>> withBankNames(List<Map<String,Object>> rows) {
+        if(rows.isEmpty()) return rows;
+        var names=payoutBanks.displayNames();
+        return rows.stream().map(row -> {
+            var result=new LinkedHashMap<String,Object>(row);
+            result.put("bankName",names.getOrDefault(Objects.toString(row.get("bankCode"),""),"Chưa xác định ngân hàng"));
+            return (Map<String,Object>)result;
+        }).toList();
     }
 
     @Transactional
     public Map<String, Object> saveBank(String token, Map<String, Object> b) {
         long staff = ServiceHttpClient.userId(identity.authenticate(token, "STAFF"));
-        balance(staff, true);
         String bank = text(b, "bankCode", 30, true), account = text(b, "accountNumber", 50, true), holder = text(b, "accountHolder", 160, true);
+        if (!payoutBanks.supports(bank)) throw bad("Vui lòng chọn ngân hàng trong danh sách hỗ trợ đã cấu hình.");
         if (!account.matches("[0-9]{5,30}"))
             throw bad("Số tài khoản phải có 5–30 chữ số.");
+        balance(staff, true);
         var existing = repository.saveBankFindStaffBankAccounts(Long.class, staff, bank, account);
         if (!existing.isEmpty())
             return Map.of("id", existing.getFirst(), "status", repository.saveBankFindStaffBankAccounts2(String.class, existing.getFirst()));
@@ -88,7 +102,7 @@ public class FinanceOperationsService {
     @Transactional
     public Map<String, Object> withdraw(String token, Map<String, Object> b) {
         long staff = ServiceHttpClient.userId(identity.authenticate(token, "STAFF"));
-        long amount = number(b, "amount", 50000, 1000000000), bankId = number(b, "bankAccountId", 1, Long.MAX_VALUE);
+        long amount = number(b, "amount", payoutConfig.minimum(), payoutConfig.maximum()), bankId = number(b, "bankAccountId", 1, Long.MAX_VALUE);
         String key = text(b, "requestKey", 160, true);
         var wallet = balance(staff, true);
         var previous = repository.withdrawFindWithdrawals(staff, key);
@@ -124,18 +138,55 @@ public class FinanceOperationsService {
 
     public List<Map<String, Object>> adminBanks(String token) {
         identity.authenticate(token, "ADMIN");
-        return repository.adminBanksFindStaffBankAccounts();
+        return withBankNames(repository.adminBanksFindStaffBankAccounts());
+    }
+
+    public List<Map<String,Object>> bankHistory(String token,long id){
+        identity.authenticate(token,"ADMIN");return repository.bankReviewHistory(id);
     }
 
     @Transactional
     public Map<String, Object> verifyBank(String token, long id, Map<String, Object> b) {
-        identity.authenticate(token, "ADMIN");
+        var admin=identity.authenticate(token,"ADMIN");
         String state = text(b, "status", 20, true);
         if (!List.of("VERIFIED", "INACTIVE").contains(state))
             throw bad("Chỉ được xác minh hoặc ngừng tài khoản.");
-        if (repository.verifyBankUpdateStaffBankAccounts(state, id) == 0)
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy tài khoản ngân hàng.");
-        return Map.of("id", id, "status", state);
+        String note=text(b,"verificationNote",2000,"VERIFIED".equals(state));
+        if("VERIFIED".equals(state) && note.length()<8) throw bad("Ghi rõ nguồn đối chiếu số tài khoản và tên người nhận.");
+        var rows=repository.bankForReview(id);
+        if(rows.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Không tìm thấy tài khoản ngân hàng.");
+        var before=rows.getFirst();long adminId=ServiceHttpClient.userId(admin);
+        // Repeating the same submitted decision must not create a second audit or change its timestamp.
+        if(state.equals(before.get("status")) && Objects.equals(before.get("verified_by"),adminId) && note.equals(Objects.toString(before.get("verification_note"),"")) && before.get("verified_at")!=null)
+            return Map.of("id",id,"status",state);
+        repository.insertBankReview(before,adminId,Objects.toString(admin.get("fullName"),""),state,note);
+        repository.verifyBankUpdateStaffBankAccounts(state,note,adminId,id);
+        return Map.of("id",id,"status",state);
+    }
+
+    @Transactional
+    public Map<String,Object> cancelWithdrawal(String token,long id){
+        long staff=ServiceHttpClient.userId(identity.authenticate(token,"STAFF"));
+        var initial=repository.reviewWithdrawalFindWithdrawals(id);
+        if(initial.isEmpty() || ((Number)initial.getFirst().get("staff_id")).longValue()!=staff)
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Không tìm thấy yêu cầu rút của bạn.");
+        // Approval, cancellation and payout all lock wallet before withdrawal.
+        var wallet=balance(staff,true);
+        var rows=repository.reviewWithdrawalFindWithdrawalsForUpdate(id);
+        if(rows.isEmpty() || ((Number)rows.getFirst().get("staff_id")).longValue()!=staff)
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Không tìm thấy yêu cầu rút của bạn.");
+        var withdrawal=rows.getFirst();long amount=((Number)withdrawal.get("amount")).longValue();
+        if("CANCELLED".equals(withdrawal.get("status")))return Map.of("id",id,"status","CANCELLED","amount",amount);
+        if(!"PENDING".equals(withdrawal.get("status")) || repository.withdrawalHasPayout(id))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"Chỉ được hủy khi đang chờ Admin duyệt. Yêu cầu đã được xử lý; vui lòng tải lại trạng thái.");
+        long balanceId=((Number)wallet.get("id")).longValue();
+        if(repository.releaseCancelledWithdrawal(balanceId,staff,amount)!=1)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"Khoản giữ chưa khớp. Yêu cầu chưa được hủy; cần kiểm tra số dư.");
+        ledger(balanceId,"DEBIT","RESERVED","RELEASE",amount,id,"withdraw:"+id+":release-reserved");
+        ledger(balanceId,"CREDIT","AVAILABLE","RELEASE",amount,id,"withdraw:"+id+":release-available");
+        if(repository.cancelPendingWithdrawal(id,staff)!=1)throw new ResponseStatusException(HttpStatus.CONFLICT,"Trạng thái yêu cầu đã thay đổi.");
+        event(staff,"WITHDRAWAL_CANCELLED",id,"Đã hủy yêu cầu rút #"+id+" và hoàn "+amount+"đ về số dư khả dụng.");
+        return Map.of("id",id,"status","CANCELLED","amount",amount);
     }
 
     public List<Map<String, Object>> withdrawals(String token) {
@@ -146,6 +197,10 @@ public class FinanceOperationsService {
     @Transactional
     public Map<String, Object> reviewWithdrawal(String token, long id, Map<String, Object> b) {
         long admin = ServiceHttpClient.userId(identity.authenticate(token, "ADMIN"));
+        // Use the same wallet -> withdrawal lock order as payout preparation/settlement.
+        var beforeReview=repository.reviewWithdrawalFindWithdrawals(id);
+        if(beforeReview.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Không tìm thấy yêu cầu rút.");
+        balance(((Number)beforeReview.getFirst().get("staff_id")).longValue(),true);
         var rows = repository.reviewWithdrawalFindWithdrawalsForUpdate(id);
         if (rows.isEmpty())
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy yêu cầu rút.");
