@@ -214,7 +214,76 @@ public class AccountService {
     }
 
     public List<Map<String, Object>> candidates() {
-        return repository.candidatesFindStaffCandidates();
+        return candidates(null);
+    }
+
+    public List<Map<String, Object>> candidates(String status) {
+        var all = repository.candidatesFindStaffCandidates();
+        if (status == null || status.isBlank() || "ALL".equalsIgnoreCase(status)) {
+            return all;
+        }
+        return all.stream()
+                .filter(c -> {
+                    String s = Objects.toString(c.get("status"), "");
+                    if ("APPLIED".equalsIgnoreCase(status)) {
+                        return "PENDING".equalsIgnoreCase(s) || "APPLIED".equalsIgnoreCase(s);
+                    }
+                    return s.equalsIgnoreCase(status);
+                })
+                .toList();
+    }
+
+    public Map<String, Object> updateCandidateStatus(long id, Map<String, Object> body) {
+        var data = findCandidate(id, true);
+        String targetStatus = Objects.toString(body.get("status"), "").trim().toUpperCase();
+        if (targetStatus.isBlank()) {
+            throw error(HttpStatus.BAD_REQUEST, "Trạng thái không được để trống.");
+        }
+        if ("APPLIED".equals(targetStatus)) targetStatus = "PENDING";
+
+        if (List.of("PENDING", "ONBOARDING", "TRAINING", "EVALUATION").contains(targetStatus)) {
+            data.put("status", targetStatus);
+            data.put("subStatus", switch (targetStatus) {
+                case "PENDING" -> "Chờ duyệt";
+                case "ONBOARDING" -> "Đang tiếp nhận hồ sơ";
+                case "TRAINING" -> "Đang học việc";
+                case "EVALUATION" -> "Chờ xếp hạng";
+                default -> "Chờ duyệt";
+            });
+        } else {
+            data.put("subStatus", "REJECTED".equals(targetStatus) ? "Đã từ chối" : targetStatus);
+            if (body.get("rejectionReason") != null) {
+                data.put("rejectionReason", body.get("rejectionReason"));
+            }
+        }
+        if (body.get("note") != null) {
+            data.put("note", body.get("note"));
+        }
+        saveCandidate(id, data);
+        return data;
+    }
+
+    public Map<String, Object> applyCandidate(Map<String, Object> input) {
+        var normalized = new LinkedHashMap<>(input);
+        if (normalized.get("cccd") == null && normalized.get("identityCard") != null) {
+            normalized.put("cccd", normalized.get("identityCard"));
+        }
+        if (normalized.get("phone") != null) {
+            normalized.put("phone", normalized.get("phone").toString().replaceAll("\\s+", ""));
+        }
+        if (normalized.get("cccd") != null) {
+            normalized.put("cccd", normalized.get("cccd").toString().replaceAll("\\s+", ""));
+        }
+        if (normalized.get("services") == null && normalized.get("registeredServices") != null) {
+            normalized.put("services", normalized.get("registeredServices"));
+        }
+        if (normalized.get("source") == null || normalized.get("source").toString().isBlank()) {
+            normalized.put("source", "Website CleanMaster");
+        }
+        if (normalized.get("note") == null) {
+            normalized.put("note", "Đăng ký ứng tuyển trực tuyến qua website");
+        }
+        return newCandidate(normalized);
     }
 
     private String text(Map<String, Object> data, String key, int max, boolean required) {
@@ -235,23 +304,66 @@ public class AccountService {
     }
 
     public Map<String, Object> newCandidate(Map<String, Object> input) {
+        var normalizedInput = new LinkedHashMap<>(input);
+        if (normalizedInput.get("cccd") == null && normalizedInput.get("identityCard") != null) {
+            normalizedInput.put("cccd", normalizedInput.get("identityCard"));
+        }
+        if (normalizedInput.get("phone") != null) {
+            normalizedInput.put("phone", normalizedInput.get("phone").toString().replaceAll("\\s+", ""));
+        }
+        if (normalizedInput.get("cccd") != null) {
+            normalizedInput.put("cccd", normalizedInput.get("cccd").toString().replaceAll("\\s+", ""));
+        }
+        if (normalizedInput.get("services") == null && normalizedInput.get("registeredServices") != null) {
+            normalizedInput.put("services", normalizedInput.get("registeredServices"));
+        }
+        if (normalizedInput.get("source") == null || normalizedInput.get("source").toString().isBlank()) {
+            normalizedInput.put("source", "Website CleanMaster");
+        }
+        if (normalizedInput.get("note") == null) {
+            normalizedInput.put("note", "Đăng ký ứng tuyển trực tuyến qua website");
+        }
+
         var data = new LinkedHashMap<String, Object>();
-        for (String key : List.of("fullName", "phone", "email", "cccd", "gender", "area", "source", "note")) data.put(key, text(input, key, key.equals("note") ? 2000 : key.equals("fullName") ? 160 : 254, !key.equals("note")));
-        if (!text(input, "phone", 30, true).matches("(?:0[0-9]{9}|\\+84[0-9]{9})") || !text(input, "cccd", 30, true).matches("[0-9]{12}") || !text(input, "email", 254, true).matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]+"))
+        for (String key : List.of("fullName", "phone", "email", "cccd", "gender", "area", "source", "note")) {
+            data.put(key, text(normalizedInput, key, key.equals("note") ? 2000 : key.equals("fullName") ? 160 : 254, !key.equals("note")));
+        }
+
+        if (!text(normalizedInput, "phone", 30, true).matches("(?:0[0-9]{9}|\\+84[0-9]{9})") || !text(normalizedInput, "cccd", 30, true).matches("[0-9]{12}") || !text(normalizedInput, "email", 254, true).matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]+"))
             throw error(HttpStatus.BAD_REQUEST, "Số điện thoại, email hoặc CCCD không hợp lệ.");
-        if (!List.of("Nam", "Nữ", "Khác").contains(data.get("gender")) || !List.of("Website", "Google Forms", "Zalo", "Walk-in").contains(data.get("source")))
-            throw error(HttpStatus.BAD_REQUEST, "Giới tính hoặc nguồn ứng viên không hợp lệ.");
-        var fullBirth = staffBirthDate(Objects.toString(input.get("dateOfBirth"), ""));
-        Object year = fullBirth == null ? input.get("birthYear") : fullBirth.getYear();
+
+        String genderVal = Objects.toString(data.get("gender"), "").trim();
+        if (genderVal.equalsIgnoreCase("male")) genderVal = "Nam";
+        else if (genderVal.equalsIgnoreCase("female")) genderVal = "Nữ";
+        else if (genderVal.equalsIgnoreCase("other")) genderVal = "Khác";
+        if (genderVal.toLowerCase().startsWith("n") && (genderVal.contains("ữ") || genderVal.toLowerCase().contains("u"))) {
+            genderVal = "Nữ";
+        } else if (genderVal.equalsIgnoreCase("Khác") || genderVal.equalsIgnoreCase("Other")) {
+            genderVal = "Khác";
+        } else {
+            genderVal = "Nam";
+        }
+        data.put("gender", genderVal);
+
+        var fullBirth = staffBirthDate(Objects.toString(normalizedInput.get("dateOfBirth"), ""));
+        Object yearObj = fullBirth == null ? normalizedInput.get("birthYear") : fullBirth.getYear();
+        Integer year = null;
+        if (yearObj instanceof Number n) {
+            year = n.intValue();
+        } else if (yearObj instanceof String s && !s.isBlank()) {
+            try { year = Integer.parseInt(s.trim()); } catch (NumberFormatException ignored) {}
+        }
         if (fullBirth != null)
             data.put("dateOfBirth", fullBirth.toString());
-        if (!(year instanceof Number number) || number.doubleValue() != number.intValue() || number.intValue() < 1940 || number.intValue() > java.time.Year.now().getValue() - 18)
+        if (year == null || year < 1940 || year > java.time.Year.now().getValue() - 18)
             throw error(HttpStatus.BAD_REQUEST, "Ứng viên phải từ 18 tuổi; kiểm tra năm sinh.");
         data.put("birthYear", year);
-        Object experience = input.get("experienceYears");
+
+        Object experience = normalizedInput.get("experienceYears");
         if (experience instanceof Number n && Double.isFinite(n.doubleValue()) && n.doubleValue() >= 0 && n.doubleValue() <= 80)
             data.put("experienceYears", n);
-        var services = strings(input, "services");
+
+        var services = strings(normalizedInput, "services");
         if (services.isEmpty())
             throw error(HttpStatus.BAD_REQUEST, "Vui lòng chọn dịch vụ mong muốn.");
         data.put("services", services);
