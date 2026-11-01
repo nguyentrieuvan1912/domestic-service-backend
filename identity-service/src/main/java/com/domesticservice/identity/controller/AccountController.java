@@ -92,10 +92,13 @@ public class AccountController {
         accounts.status(id, "CUSTOMER", body);
     }
 
+
     @GetMapping("/admin/candidates")
-    public List<Map<String, Object>> candidates(@RequestHeader(value = "Authorization", required = false) String token) {
+    public List<Map<String, Object>> candidates(
+            @RequestHeader(value = "Authorization", required = false) String token,
+            @RequestParam(value = "status", required = false) String status) {
         accounts.authenticate(token, true);
-        return accounts.candidates();
+        return accounts.candidates(status);
     }
 
     @PostMapping("/admin/candidates")
@@ -103,6 +106,15 @@ public class AccountController {
     public Map<String, Object> create(@RequestHeader(value = "Authorization", required = false) String token, @RequestBody Map<String, Object> body) {
         accounts.authenticate(token, true);
         return accounts.newCandidate(body);
+    }
+
+    @PatchMapping("/admin/candidates/{id}/status")
+    public Map<String, Object> updateCandidateStatus(
+            @RequestHeader(value = "Authorization", required = false) String token,
+            @PathVariable long id,
+            @RequestBody Map<String, Object> body) {
+        accounts.authenticate(token, true);
+        return accounts.updateCandidateStatus(id, body);
     }
 
     @PatchMapping("/admin/candidates/{id}")
