@@ -103,3 +103,11 @@ SMTP là dịch vụ tùy chọn khi khởi động, không nằm trong health l
 - GET auth/profile, staff-directory và admin/staff trả dateOfBirth là chuỗi ngày lịch YYYY-MM-DD (không timestamp UTC), birthYear là số hoặc null. Directory chỉ gồm tài khoản đang hoạt động đã được cấp/duyệt.
 - Avatar mặc định của Staff lưu ở users.avatar_url là /api/v1/identity/staff-avatar.png, ảnh PNG công khai do Identity phục vụ. Profile, directory và màn quản trị dùng cùng giá trị; mobile/web ghép đường dẫn tương đối với API_BASE_URL. Ảnh đã có được giữ nguyên.
 - Customer không hiển thị nhãn CCCD/xác minh lặp lại. Khi chỉ có năm sinh, hiển thị năm sinh; khi không có dữ liệu, hiển thị chưa cập nhật thay vì 0 tuổi. Không bổ sung số CCCD hoặc thông tin liên hệ vào API directory công khai.
+
+## CAPTCHA hồ sơ đối tác (03/11/2026)
+
+- `GET /api/v1/identity/candidates/captcha` (public, `Cache-Control: no-store`): trả `{id, image, expiresAt}`. `image` là PNG data URL; mã ngẫu nhiên 6 ký tự chỉ nằm trong ảnh, không trả đáp án dạng text. Mã hết hạn sau 5 phút.
+- `POST /api/v1/identity/candidates/apply` yêu cầu thêm `captchaId` và `captchaCode` bên cạnh hồ sơ hiện có. Không phân biệt hoa/thường. Mỗi mã chỉ được thử một lần; sau mọi lần gửi (kể cả lỗi hồ sơ), client lấy mã mới và giữ thông tin đã nhập. Sai/thiếu/hết hạn/dùng lại trả 400 trước khi lưu hồ sơ.
+- V17 lưu hash mã, thời hạn và trạng thái sử dụng trong Identity DB. Khóa bản ghi ngăn hai request dùng chung một mã. Không ảnh hưởng API tạo ứng viên dành cho Admin có xác thực.
+- Ngân sách chung toàn hệ thống, dùng database và khóa hàng: tối đa 120 lần cấp mã/phút, 30 lần gửi hồ sơ/phút, tính cả yêu cầu thiếu/sai mã. Vượt giới hạn trả 429. Đây là giới hạn tổng, không phải theo IP; không tin `X-Forwarded-For` do client tự cung cấp. Chỉ bảo vệ luồng hồ sơ ở tầng ứng dụng, không thay thế chống DDoS ở hạ tầng.
+- Web đọc toàn bộ trang `/catalog/services` và `/catalog/categories`, nhóm theo `categories.group` (CLEANING, APPLIANCES, CARE, HOME_TASKS); không dùng dữ liệu dự phòng khi API lỗi. Mobile hiện không gọi endpoint ứng tuyển này; client bổ sung sau phải tuân thủ cùng hợp đồng CAPTCHA.

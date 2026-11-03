@@ -4,7 +4,6 @@ Push-Location (Split-Path $PSScriptRoot -Parent)
 try {
     $dbAdmin = (docker compose exec -T postgres printenv POSTGRES_USER).Trim()
     if ($LASTEXITCODE -ne 0) { throw "PostgreSQL is not running" }
-    $expected = @{ identity_db = 16; catalog_db = 8; booking_db = 18; finance_db = 17; ai_db = 7 }
     foreach ($database in @("identity_db","catalog_db","booking_db","finance_db","ai_db")) {
         $module = @{ identity_db='identity-service'; catalog_db='catalog-service'; booking_db='booking-service'; finance_db='finance-service'; ai_db='ai-assistant-service' }[$database]
         $migrationFiles = Get-ChildItem "$module/src/main/resources/db/migration/V*__*.sql"
@@ -14,11 +13,16 @@ try {
         $expectedTables = @($migrationFiles | ForEach-Object {
             [regex]::Matches((Get-Content -Raw $_.FullName), '(?im)^CREATE TABLE\s+(\w+)') | ForEach-Object { $_.Groups[1].Value }
         } | Where-Object { $_ -ne 'service_schema_metadata' } | Sort-Object -Unique)
+        if ($expectedTables.Count -eq 0) { throw "No CREATE TABLE definitions found in migrations for $database" }
         $actualTables = @(docker compose exec -T postgres psql -U $dbAdmin -d $database -t -A -c "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('service_schema_metadata','flyway_schema_history') ORDER BY tablename;")
         if ($LASTEXITCODE -ne 0) { throw "Cannot read table inventory in $database" }
-        if (Compare-Object $expectedTables $actualTables) { throw "Table names differ from migrations in $database" }
+        $tableDifferences = @(Compare-Object $expectedTables $actualTables)
+        if ($tableDifferences.Count -gt 0) {
+            $details = ($tableDifferences | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" }) -join ', '
+            throw "Table names differ from migrations in ${database}: $details (<= missing, => unexpected)"
+        }
         $tableCount = docker compose exec -T postgres psql -U $dbAdmin -d $database -t -A -c "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('service_schema_metadata','flyway_schema_history');"
-        if ($LASTEXITCODE -ne 0 -or [int]$tableCount -ne $expected[$database]) { throw "Unexpected table count in $database" }
+        if ($LASTEXITCODE -ne 0 -or [int]$tableCount -ne $expectedTables.Count) { throw "Unexpected table count in ${database}: expected $($expectedTables.Count) from migrations, got $tableCount" }
         $migrations = docker compose exec -T postgres psql -U $dbAdmin -d $database -t -A -c "SELECT count(DISTINCT coalesce(version,description)) FROM flyway_schema_history WHERE success AND (version IN ('2','3') OR description='demo data');"
         if ($LASTEXITCODE -ne 0 -or [int]$migrations -ne 3) { throw "Domain/numeric-ID migration or demo seed missing in $database" }
         $uuidColumns = docker compose exec -T postgres psql -U $dbAdmin -d $database -t -A -c "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND data_type='uuid' AND column_name <> 'hold_token';"
