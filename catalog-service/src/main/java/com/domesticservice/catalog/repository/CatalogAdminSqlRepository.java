@@ -22,7 +22,7 @@ public class CatalogAdminSqlRepository {
     }
 
     public List<Map<String, Object>> snapshotFindServiceCategories(Object... args) {
-        return db.queryForList("SELECT id,category_name AS name,description,status FROM service_categories ORDER BY id", args);
+        return db.queryForList("SELECT id,category_name AS name,description,status,category_group AS \"group\" FROM service_categories ORDER BY id", args);
     }
 
     public List<Map<String, Object>> snapshotFindServices(Object... args) {

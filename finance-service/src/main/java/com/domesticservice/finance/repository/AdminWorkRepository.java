@@ -8,12 +8,8 @@ public class AdminWorkRepository {
  public AdminWorkRepository(JdbcTemplate db){this.db=db;}
  public Map<String,Object> snapshot(){
   var items=db.queryForList("""
-   SELECT 'bank:'||id AS key,status AS state,'transactions' AS section,'/admin/transactions?section=withdrawals' AS target,
-    'Tài khoản ngân hàng chờ xác minh #'||id AS title,'Nhân viên #'||staff_id AS summary
-   FROM staff_bank_accounts WHERE status='PENDING' OR (status='VERIFIED' AND verified_at IS NULL)
-   UNION ALL
-   SELECT 'withdrawal:'||w.id,w.status||':'||coalesce(p.status,''),'transactions','/admin/transactions?section=withdrawals',
-    'Yêu cầu rút tiền #'||w.id,CASE w.status WHEN 'PENDING' THEN 'Chờ duyệt' WHEN 'APPROVED' THEN 'Chờ admin chuyển tiền' ELSE 'Cần kiểm tra kết quả chuyển khoản' END
+   SELECT 'withdrawal:'||w.id AS key,w.status||':'||coalesce(p.status,'') AS state,'transactions' AS section,'/admin/transactions?section=withdrawals' AS target,
+    'Yêu cầu rút tiền #'||w.id AS title,CASE w.status WHEN 'PENDING' THEN 'Chờ duyệt' WHEN 'APPROVED' THEN 'Chờ admin chuyển tiền' ELSE 'Cần kiểm tra kết quả chuyển khoản' END AS summary
    FROM withdrawals w LEFT JOIN withdrawal_payouts p ON p.withdrawal_id=w.id WHERE w.status IN ('PENDING','APPROVED','PROCESSING') OR p.status='REVIEW'
    UNION ALL
    SELECT 'refund:'||id,status,'transactions','/admin/transactions?section=transactions','Hoàn tiền cần xử lý #'||id,'Trạng thái: '||status FROM refunds WHERE status IN ('PENDING','APPROVED','PROCESSING','FAILED')

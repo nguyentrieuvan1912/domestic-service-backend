@@ -91,7 +91,7 @@ public class PayosPayoutClient {
             if(body==null) request.GET();else request.header("x-signature",sign(body)).POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
             // No automatic POST retries: lost responses are recovered by the persisted reference.
             var response=http.send(request.build(),HttpResponse.BodyHandlers.ofString());
-            if(response.statusCode()!=200) throw unavailable("Chưa xác minh được Kênh chi payOS; kiểm tra khóa, IP cho phép và nguồn chi.");
+            if(response.statusCode()!=200) throw providerFailure(response);
             var envelope=json.readValue(response.body(),new TypeReference<Map<String,Object>>(){});
             if(!"00".equals(envelope.get("code")) || !(envelope.get("data") instanceof Map<?,?>))
                 throw unavailable("payOS chưa xác nhận yêu cầu chi; giữ nguyên mã giao dịch để đối soát.");
@@ -104,6 +104,19 @@ public class PayosPayoutClient {
             return data;
         }catch(InterruptedException ex){Thread.currentThread().interrupt();throw unavailable("Kết nối Kênh chi bị gián đoạn; tra cứu lại cùng giao dịch.");}
         catch(java.io.IOException | IllegalArgumentException | tools.jackson.core.JacksonException ex){throw unavailable("Chưa nhận được kết quả Kênh chi; tra cứu lại cùng giao dịch.");}
+    }
+    private ResponseStatusException providerFailure(HttpResponse<String> response) {
+        if(response.statusCode()==401) return unavailable("payOS từ chối xác thực Kênh chi. Vui lòng kiểm tra Client ID và API Key của Kênh chi.");
+        if(response.statusCode()==403) {
+            try {
+                var problem=json.readValue(response.body(),new TypeReference<Map<String,Object>>(){});
+                if(Objects.toString(problem.get("desc"),"").toLowerCase(Locale.ROOT).contains("ip"))
+                    return unavailable("payOS chặn địa chỉ IP của backend. Vui lòng thêm IP public của backend vào danh sách IP được phép của Kênh chi payOS rồi kiểm tra lại.");
+            } catch(RuntimeException ignored) { /* Do not expose arbitrary provider response bodies. */ }
+            return unavailable("payOS từ chối quyền truy cập Kênh chi. Vui lòng kiểm tra quyền API và danh sách IP được phép.");
+        }
+        if(response.statusCode()==429) return unavailable("payOS đang giới hạn tần suất truy cập. Vui lòng chờ rồi kiểm tra lại nguồn chi.");
+        return unavailable("Chưa xác minh được Kênh chi payOS; kiểm tra khóa, IP cho phép và nguồn chi.");
     }
     private static ResponseStatusException unavailable(String message){return new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,message);}
 }
