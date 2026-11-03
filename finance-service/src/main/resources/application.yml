@@ -1,6 +1,11 @@
 server:
   port: ${SERVER_PORT:8084}
 payments:
+  bank-lookup:
+    provider: ${BANK_LOOKUP_PROVIDER:PAY2S}
+    api-key: ${BANKLOOKUP_API_KEY:}
+    api-secret: ${BANKLOOKUP_API_SECRET:}
+    secret-key: ${PAY2S_SECRET_KEY:}
   sepay:
     enabled: ${SEPAY_ENABLED:false}
     api-token: ${SEPAY_API_TOKEN:}
@@ -11,6 +16,7 @@ payments:
     tkp: ${SEPAY_TKP:}
     public-url: ${SEPAY_PUBLIC_URL:}
   payout:
+    automatic: ${PAYOS_PAYOUT_AUTOMATIC:false}
     enabled: ${PAYOS_PAYOUT_ENABLED:false}
     client-id: ${PAYOS_PAYOUT_CLIENT_ID:}
     api-key: ${PAYOS_PAYOUT_API_KEY:}

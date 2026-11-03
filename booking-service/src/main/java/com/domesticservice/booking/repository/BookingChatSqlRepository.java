@@ -27,6 +27,8 @@ public class BookingChatSqlRepository {
         String visible = role.equals("CUSTOMER") ? " AND m.id>c.customer_deleted_through_id" : "";
         String query = """
             SELECT c.*,b.status AS booking_status,b.booking_code,b.service_snapshot,b.address_snapshot,
+                   CASE WHEN b.status='COMPLETED' AND b.completed_at<=now()-interval '24 hours'
+                        THEN b.completed_at+interval '24 hours' END AS completed_archive_at,
                    recent.content AS last_content,recent.sent_at AS last_sent_at,
                    counts.customer_unread,counts.staff_unread
             FROM conversations c JOIN bookings b ON b.id=c.booking_id
@@ -42,7 +44,7 @@ public class BookingChatSqlRepository {
     }
 
     public List<Map<String, Object>> messagesFindMessages(long id, long deletedThrough) {
-        return db.queryForList("SELECT id,conversation_id AS \"conversationId\",sender_id AS \"senderId\",sender_type AS \"senderType\",message_type AS \"contentType\",content,media_url AS \"mediaUrl\",sent_at AS \"sentAt\",(read_at IS NOT NULL) AS \"isRead\" FROM messages WHERE conversation_id=? AND id>? ORDER BY sent_at,id", id, deletedThrough);
+        return db.queryForList("SELECT m.id,m.conversation_id AS \"conversationId\",m.sender_id AS \"senderId\",m.sender_type AS \"senderType\",m.message_type AS \"contentType\",m.content,m.media_url AS \"mediaUrl\",m.sent_at AS \"sentAt\",(m.read_at IS NOT NULL) AS \"isRead\",e.id AS \"evidenceId\",e.booking_id AS \"evidenceBookingId\",e.stage AS \"evidenceStage\" FROM messages m LEFT JOIN booking_job_evidence e ON e.message_id=m.id WHERE m.conversation_id=? AND m.id>? ORDER BY m.sent_at,m.id", id, deletedThrough);
     }
 
     public List<Map<String, Object>> sendFindMessages(Object... args) {
@@ -70,12 +72,16 @@ public class BookingChatSqlRepository {
 
     @org.springframework.transaction.annotation.Transactional
     public int archiveExpired(Long conversationId) {
+        // Clear deadlines from the former idle-message rule, preserving deletion watermarks.
+        String restore = "UPDATE conversations c SET customer_trashed_at=NULL FROM bookings b WHERE b.id=c.booking_id AND c.customer_trashed_at IS NOT NULL AND (b.status<>'COMPLETED' OR b.completed_at IS NULL OR b.completed_at>now()-interval '24 hours')";
+        if (conversationId == null) db.update(restore); else db.update(restore + " AND c.id=?",conversationId);
         String query = """
-            UPDATE conversations c SET customer_trashed_at=coalesce(
-                (SELECT max(m.sent_at) FROM messages m WHERE m.conversation_id=c.id AND m.id>c.customer_deleted_through_id),c.created_at)+interval '24 hours'
-            WHERE c.customer_trashed_at IS NULL
+            UPDATE conversations c SET customer_trashed_at=b.completed_at+interval '24 hours'
+            FROM bookings b
+            WHERE b.id=c.booking_id AND b.status='COMPLETED'
+              AND b.completed_at<=now()-interval '24 hours'
+              AND c.customer_trashed_at IS DISTINCT FROM b.completed_at+interval '24 hours'
               AND (c.customer_deleted_at IS NULL OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND m.id>c.customer_deleted_through_id))
-              AND coalesce((SELECT max(m.sent_at) FROM messages m WHERE m.conversation_id=c.id AND m.id>c.customer_deleted_through_id),c.created_at)<=now()-interval '24 hours'
             """;
         return conversationId == null ? db.update(query) : db.update(query + " AND c.id=?",conversationId);
     }

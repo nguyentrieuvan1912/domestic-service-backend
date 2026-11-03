@@ -19,7 +19,7 @@ class StaffAvailabilityLimitTest {
     @Test void usesSavedEndAndReservesTravelTimeBeforeNextBooking() {
         var db = database;
         db.execute("CREATE TABLE staff_availabilities(staff_id BIGINT,status VARCHAR(30),available_date DATE,day_of_week INT,start_time TIME,end_time TIME)");
-        db.execute("CREATE TABLE bookings(id BIGINT,starts_at TIMESTAMP,status VARCHAR(30))");
+        db.execute("CREATE TABLE bookings(id BIGINT,starts_at TIMESTAMP,status VARCHAR(30),payment_method VARCHAR(30) DEFAULT 'CASH',payment_status VARCHAR(30) DEFAULT 'PENDING')");
         db.execute("CREATE TABLE booking_assignments(booking_id BIGINT,staff_id BIGINT,status VARCHAR(30))");
         db.update("INSERT INTO staff_availabilities VALUES (99,'AVAILABLE','2026-10-16',NULL,'08:00','17:00')");
         var service=new BookingCreationService(mock(BookingOperationsService.class),mock(BookingWorkflowService.class),new com.domesticservice.booking.repository.BookingCreationSqlRepository(queries),new ObjectMapper(),mock(PlatformTransactionManager.class));
@@ -27,11 +27,15 @@ class StaffAvailabilityLimitTest {
         var initial=service.availabilityLimit(99,start);
         assertEquals("2026-10-16T10:00:00Z",initial.get("availableUntil"));
         assertEquals("SCHEDULE_END",initial.get("availableUntilReason"));
-        db.update("INSERT INTO bookings VALUES (1,?,'STAFF_ASSIGNED')",Timestamp.from(Instant.parse("2026-10-16T09:00:00Z")));
+        db.update("INSERT INTO bookings(id,starts_at,status) VALUES (1,?,'STAFF_ASSIGNED')",Timestamp.from(Instant.parse("2026-10-16T09:00:00Z")));
         db.update("INSERT INTO booking_assignments VALUES (1,99,'ASSIGNED')");
         var reserved=service.availabilityLimit(99,start);
         assertEquals("2026-10-16T08:00:00Z",reserved.get("availableUntil"));
         assertEquals("NEXT_BOOKING",reserved.get("availableUntilReason"));
+        db.update("UPDATE bookings SET status='AWAITING_PAYMENT',payment_method='BANK_TRANSFER_QR'");
+        assertEquals(initial,service.availabilityLimit(99,start),"Unpaid QR must not reserve the staff's time");
+        db.update("UPDATE bookings SET status='STAFF_ASSIGNED',payment_status='PAID'");
+        assertEquals(reserved,service.availabilityLimit(99,start));
         db.update("UPDATE bookings SET status='CANCELLED'");
         assertEquals(initial,service.availabilityLimit(99,start));
     }

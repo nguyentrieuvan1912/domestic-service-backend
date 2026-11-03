@@ -56,6 +56,14 @@ public class CommunityService {
         long id=repository.createPost(user.id(),content,status,json.writeValueAsString(selected),key,hash);
         ids.forEach(asset->media.attach(asset,id));return Map.of("id",id,"status",status);
     }
+    public Map<String,Object> confirmPost(String token,String requestKey) {
+        var user=accounts.authenticate(token,false);
+        if(!requestKey.matches("[A-Za-z0-9_-]{1,160}"))throw bad("Mã yêu cầu không hợp lệ.");
+        var saved=repository.existingPost(user.id(),requestKey);
+        if(saved==null)throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Chưa tìm thấy bài viết đã lưu cho yêu cầu này.");
+        return Map.of("id",saved.get("id"),"status",saved.get("status"));
+    }
+
     public Map<String,Object> comments(String token,long id,Long before,Long after){
         post(token,id);long uid=user(token);
         if(before!=null && after!=null || before!=null && before<=0 || after!=null && after<0)throw bad("Mốc bình luận không hợp lệ.");

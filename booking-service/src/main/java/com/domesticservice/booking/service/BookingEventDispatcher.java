@@ -68,8 +68,8 @@ public class BookingEventDispatcher {
                     String state = Objects.toString(payload.get("status"), Objects.toString(event.get("event_type"))), code = Objects.toString(b.get("booking_code"));
                     Set<Long> users = new LinkedHashSet<>();
                     users.add(((Number) b.get("customer_id")).longValue());
-                    users.addAll(repository.dispatchFindBookingAssignments(Long.class, b.get("id")));
-                    boolean created = "PENDING".equals(payload.get("oldStatus")) && List.of("MATCHING", "STAFF_ASSIGNED").contains(state);
+                    if (!"AWAITING_PAYMENT".equals(state)) users.addAll(repository.dispatchFindBookingAssignments(Long.class, b.get("id")));
+                    boolean created = ("PENDING".equals(payload.get("oldStatus")) || "AWAITING_PAYMENT".equals(payload.get("oldStatus"))) && List.of("MATCHING", "STAFF_ASSIGNED").contains(state);
                     if ("MATCHING".equals(state) && "MODE_B".equals(b.get("booking_mode"))) {
                         for (var staff : identity.list("/api/v1/identity/staff-directory", null)) {
                             long staffId = ServiceHttpClient.userId(staff);

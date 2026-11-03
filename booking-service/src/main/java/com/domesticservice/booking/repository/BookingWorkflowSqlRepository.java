@@ -6,6 +6,9 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public class BookingWorkflowSqlRepository {
+    public boolean completionEvidence(long assignment) {
+        return db.queryForObject("SELECT count(DISTINCT stage)=2 FROM booking_job_evidence WHERE assignment_id=?",Boolean.class,assignment);
+    }
 
     private final NativeQueryExecutor db;
 
@@ -30,7 +33,7 @@ public class BookingWorkflowSqlRepository {
     }
 
     public List<Map<String, Object>> bookingViewFindBookingAssignments(Object... args) {
-        return db.queryForList("SELECT id,staff_id AS \"staffId\",status,staff_snapshot AS \"staffSnapshot\",execution_status AS \"executionStatus\",accepted_at AS \"acceptedAt\" FROM booking_assignments WHERE booking_id=? ORDER BY id", args);
+        return db.queryForList("SELECT id,staff_id AS \"staffId\",status,staff_snapshot AS \"staffSnapshot\",execution_status AS \"executionStatus\",accepted_at AS \"acceptedAt\",cash_received_at AS \"cashReceivedAt\" FROM booking_assignments WHERE booking_id=? ORDER BY id", args);
     }
 
     public List<Map<String, Object>> bookingViewExistsBookingAssignments(Object... args) {
@@ -71,7 +74,7 @@ public class BookingWorkflowSqlRepository {
     }
 
     public <T> T eligibilityExistsBookings(Class<T> type, Object... args) {
-        return db.queryForObject("SELECT EXISTS(SELECT 1 FROM bookings b JOIN booking_assignments a ON a.booking_id=b.id WHERE a.staff_id=? AND a.status IN ('ASSIGNED','ACCEPTED','COMPLETED') AND b.id<>? AND b.status NOT IN ('CANCELLED','REFUNDED','REJECTED') AND b.starts_at<? AND b.ends_at>?)", type, args);
+        return db.queryForObject("SELECT EXISTS(SELECT 1 FROM bookings b JOIN booking_assignments a ON a.booking_id=b.id WHERE a.staff_id=? AND a.status IN ('ASSIGNED','ACCEPTED','COMPLETED') AND b.id<>? AND b.status NOT IN ('AWAITING_PAYMENT','CANCELLED','REFUNDED','REJECTED','NO_STAFF_FOUND') AND (b.payment_method='CASH' OR b.payment_status='PAID') AND b.starts_at<? AND b.ends_at>?)", type, args);
     }
 
     public <T> T eligibilityCountBookingAssignments(Class<T> type, Object... args) {
@@ -165,6 +168,8 @@ public class BookingWorkflowSqlRepository {
     public <T> T progressCountBookingAssignments(Class<T> type, Object... args) {
         return db.queryForObject("SELECT count(*) FROM booking_assignments WHERE booking_id=? AND status IN ('ACCEPTED','COMPLETED')", type, args);
     }
+
+    public void confirmCashCollection(long assignment) { db.update("UPDATE booking_assignments SET cash_received_at=coalesce(cash_received_at,now()) WHERE id=?",assignment); }
 
     public int progressUpdateBookingAssignments(Object... args) {
         return db.update("UPDATE booking_assignments SET execution_status=?,status=? WHERE id=?", args);

@@ -30,7 +30,7 @@ public class BookingCreationSqlRepository {
     }
 
     public long createInsertBookings(Object... args) {
-        return insert("INSERT INTO bookings(booking_code,booking_mode,status,customer_id,service_id,package_id,address_id,quote_id,quote_version,service_snapshot,address_snapshot,starts_at,ends_at,required_staff_count,base_amount,add_on_amount,discount_amount,total_amount,promotion_id,promotion_code,payment_method,notes,request_key,request_hash,pricing_confirmed) VALUES (?,?,'PENDING',?,?,?,?,?,1,CAST(? AS jsonb),CAST(? AS jsonb),?,?,?,?,?,?,?,?,?,'CASH',?,?,?,false)", args);
+        return insert("INSERT INTO bookings(booking_code,booking_mode,status,customer_id,service_id,package_id,address_id,quote_id,quote_version,service_snapshot,address_snapshot,starts_at,ends_at,required_staff_count,base_amount,add_on_amount,discount_amount,total_amount,promotion_id,promotion_code,payment_method,notes,request_key,request_hash,pricing_confirmed) VALUES (?,?,'PENDING',?,?,?,?,?,1,CAST(? AS jsonb),CAST(? AS jsonb),?,?,?,?,?,?,?,?,?,?, ?,?,?,false)", args);
     }
 
     public long createInsertBookingAddOns(Object... args) {
@@ -54,7 +54,7 @@ public class BookingCreationSqlRepository {
     }
 
     public int createUpdateBookings(Object... args) {
-        return db.update("UPDATE bookings SET pricing_confirmed=true,staff_response_deadline=CASE WHEN booking_mode='MODE_A' THEN now()+interval '5 minutes' END,staff_wait_state=CASE WHEN booking_mode='MODE_A' THEN 'WAITING' END,staff_wait_round=CASE WHEN booking_mode='MODE_A' THEN 1 ELSE 0 END WHERE id=?", args);
+        return db.update("UPDATE bookings SET pricing_confirmed=true,staff_response_deadline=CASE WHEN booking_mode='MODE_A' AND payment_method='CASH' THEN now()+interval '5 minutes' END,staff_wait_state=CASE WHEN booking_mode='MODE_A' AND payment_method='CASH' THEN 'WAITING' END,staff_wait_round=CASE WHEN booking_mode='MODE_A' AND payment_method='CASH' THEN 1 ELSE 0 END WHERE id=?", args);
     }
 
     public int createUpdateOutboxEvents(Object... args) {
@@ -82,6 +82,6 @@ public class BookingCreationSqlRepository {
     }
 
     public <T> T availabilityLimitFindBookings(Class<T> type, Object... args) {
-        return db.queryForObject("SELECT min(b.starts_at) FROM bookings b JOIN booking_assignments a ON a.booking_id=b.id WHERE a.staff_id=? AND a.status IN ('ASSIGNED','ACCEPTED','COMPLETED') AND b.status NOT IN ('CANCELLED','REFUNDED','REJECTED','NO_STAFF_FOUND') AND b.starts_at>?", type, args);
+        return db.queryForObject("SELECT min(b.starts_at) FROM bookings b JOIN booking_assignments a ON a.booking_id=b.id WHERE a.staff_id=? AND a.status IN ('ASSIGNED','ACCEPTED','COMPLETED') AND b.status NOT IN ('AWAITING_PAYMENT','CANCELLED','REFUNDED','REJECTED','NO_STAFF_FOUND') AND (b.payment_method='CASH' OR b.payment_status='PAID') AND b.starts_at>?", type, args);
     }
 }

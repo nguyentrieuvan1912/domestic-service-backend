@@ -103,20 +103,6 @@ public class FinanceOperationsController {
         return ops.savePolicy(token, b);
     }
 
-    @PostMapping("/admin/bookings/{id}/cash-receipt")
-    public Map<String, Object> cash(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id, @RequestBody Map<String, Object> b) {
-        var result = ops.cashReceipt(token, id, b);
-        ops.syncPayment(token, id);
-        return result;
-    }
-
-    @PostMapping("/admin/bookings/{id}/settle")
-    public Map<String, Object> settle(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id) {
-        var result = ops.settle(token, id);
-        ops.syncPayment(token, id);
-        return result;
-    }
-
     @GetMapping("/admin/adjustments")
     public List<Map<String, Object>> adjustments(@RequestHeader(value = "Authorization", required = false) String token) {
         return ops.adjustments(token);

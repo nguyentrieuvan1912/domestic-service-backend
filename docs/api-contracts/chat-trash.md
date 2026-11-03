@@ -1,15 +1,17 @@
-# Customer conversation trash
+# Conversation trash after booking completion
 
-Booking service owns the customer trash state. Migration V11 adds conversations.customer_trashed_at, customer_deleted_at and customer_deleted_through_id. Existing booking/conversation/message IDs and chat permissions are unchanged.
+Booking owns the archive deadline. A whole booking/staff conversation moves out of the main inbox 24 hours after bookings.completed_at, only when status is COMPLETED. Last-message and conversation-creation times do not start or extend the deadline. Active, cancelled and completed-without-timestamp bookings are not guessed to be expired.
 
-A whole order/staff conversation enters customer trash 24 hours after its most recent message (or creation for an empty conversation). A scheduled sweep runs every 60 seconds; customer inbox reads and delete operations also reconcile the expiry. Sending a new message clears the trash flag and returns the conversation to the main customer inbox. Staff history is unaffected by customer trash actions.
+The 60-second sweep persists customer_trashed_at; customer inbox reads and deletion also reconcile the boundary immediately. Staff inbox reads calculate the same deadline directly from the committed booking completion. Migration V16 corrects earlier idle-message trash flags. Reconciliation also clears former flags on active/recently completed threads without changing customer deletion watermarks.
 
-GET /api/v1/booking/conversations still returns both roles' authorized conversations. New fields:
-- customerTrashedAt: nullable ISO timestamp. Customer clients show these threads in trash and exclude their unread counts from the main inbox badge.
-- customerDeletedThroughId: message high-water mark for the authenticated customer; zero for staff. Clients must discard cached customer messages through this ID, including after a deletion on another device.
+GET /api/v1/booking/conversations returns authorized conversations, including trash:
 
-DELETE /api/v1/booking/conversations/{id}/trash permanently removes the current history from the authenticated customer's account. It only accepts a customer-owned conversation currently in trash and returns 204 after persistence. Errors: 401 unauthenticated, 403 wrong role, 404 another customer's conversation, 409 not in trash (including a new message received since the confirmation dialog opened). The server locks the conversation against concurrent send/delete.
+- trashedAt: nullable ISO timestamp scoped to the requesting participant. Both customer and staff clients exclude these conversations and unread counts from the main inbox, and display them in /chat/trash.
+- customerTrashedAt: retained for compatibility with customer clients.
+- customerDeletedThroughId: the authenticated customer's permanent deletion watermark, zero for staff. Clients must discard cached customer messages through this ID.
 
-Deletion stores a permanent high-water mark and timestamp rather than destroying the staff member's copy. Customer message reads/previews/unread counts exclude messages through that mark; staff reads retain their existing history. A future message may reopen the same conversation but cannot restore the customer's deleted history. Empty deleted conversations remain hidden until their first new message. Booking, assignment and call records are retained.
+DELETE /api/v1/booking/conversations/{id}/trash remains customer-only. It accepts only an owned conversation already in trash, returns 204 after persistence and locks the conversation against concurrent mutation. Errors: 401 unauthenticated, 403 wrong role, 404 not owned, 409 not in trash. Staff can read their archived conversations; no staff permanent-deletion action is added.
 
-Mobile and Expo Web share the inbox trash button and /chat/trash screen. The separate landing/admin website currently has no customer messaging UI.
+Deletion records a watermark and timestamp, preserving staff history, messages and immutable evidence photos for complaint review. It does not destroy database evidence or restore previously deleted customer history. Completed conversations remain read-only, including inside trash. Empty completed conversations follow the same completion deadline.
+
+Mobile and Expo Web share the main-inbox filter, unread-badge filter and trash screen. The separate landing/admin website has no customer messaging UI; admin order evidence remains available.

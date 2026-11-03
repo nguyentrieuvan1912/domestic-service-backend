@@ -1,3 +1,5 @@
+> Cập nhật 30/10/2026: luồng thu tiền và quyết toán admin trong tài liệu này đã được thay bằng [tự động ghi thu nhập khi hoàn tất ca](automatic-job-settlement.md).
+
 # API nghiệp vụ đang triển khai theo V5
 
 Cập nhật 14/10/2026. Phần này mô tả code hiện có; các contract dự thảo cũ cần đối chiếu với file này. Customer/Staff dùng mobile, Admin dùng web. Mỗi service vẫn sở hữu database và transaction riêng.

@@ -20,6 +20,9 @@ public class BookingWorkflowService {
     private final BookingWorkflowSqlRepository repository;
 
     private final ObjectMapper json;
+    private BookingFinanceBridge finance;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void finance(BookingFinanceBridge finance){this.finance=finance;}
 
     public BookingWorkflowService(BookingOperationsService ops, BookingWorkflowSqlRepository repository, ObjectMapper json) {
         this.ops = ops;
@@ -38,7 +41,7 @@ public class BookingWorkflowService {
         long user = ServiceHttpClient.userId(actor);
         if ("ADMIN".equals(actor.get("role")) || "CUSTOMER".equals(actor.get("role")) && ((Number) booking.get("customer_id")).longValue() == user)
             return;
-        if ("STAFF".equals(actor.get("role")) && Boolean.TRUE.equals(repository.ownedExistsBookingAssignments(Boolean.class, booking.get("id"), user)))
+        if ("STAFF".equals(actor.get("role")) && !"AWAITING_PAYMENT".equals(booking.get("status")) && Boolean.TRUE.equals(repository.ownedExistsBookingAssignments(Boolean.class, booking.get("id"), user)))
             return;
         throw error(HttpStatus.NOT_FOUND, "Không tìm thấy đơn thuộc tài khoản của bạn.");
     }
@@ -74,6 +77,7 @@ public class BookingWorkflowService {
         result.put("promotionCode", b.get("promotion_code"));
         result.put("paymentMethod", b.get("payment_method"));
         result.put("paymentStatus", b.get("payment_status"));
+        result.put("settlementStatus", b.get("finance_sync_error") != null ? "RETRYING" : Boolean.TRUE.equals(b.get("finance_sync_required")) ? "PROCESSING" : b.get("finance_settled_at") != null ? "SETTLED" : "WAITING");
         result.put("notes", b.get("notes"));
         result.put("createdAt", instant(b.get("created_at")));
         result.put("updatedAt", instant(b.get("updated_at")));
@@ -178,8 +182,12 @@ public class BookingWorkflowService {
         opportunity.put("startsAt", instant(b.get("starts_at")));
         opportunity.put("endsAt", instant(b.get("ends_at")));
         opportunity.put("packageTitle", Objects.toString(service.get("packageName"), ""));
-        opportunity.put("netIncome", 0);
-        opportunity.put("incomePendingPolicy", true);
+        long share = ((Number)b.get("total_amount")).longValue() / required;
+        long net = java.math.BigDecimal.valueOf(share).multiply(java.math.BigDecimal.valueOf(80)).divide(java.math.BigDecimal.valueOf(100),0,java.math.RoundingMode.DOWN).longValueExact();
+        opportunity.put("netIncome", net);
+        opportunity.put("platformFee", share-net);
+        opportunity.put("cashCollectionAmount", share);
+        opportunity.put("incomePendingPolicy", false);
         opportunity.put("mode", "MODE_A".equals(b.get("booking_mode")) ? "A" : "B");
         opportunity.put("positionsRequired", required);
         opportunity.put("positionsRemaining", Math.max(0, required - occupied));
@@ -251,9 +259,14 @@ public class BookingWorkflowService {
         value.put("packageTitle", Objects.toString(service.get("packageName"), ""));
         value.put("notes", b.get("notes"));
         value.put("totalCustomerPaid", b.get("total_amount"));
-        value.put("platformFee", 0);
-        value.put("netIncome", 0);
-        value.put("incomePendingPolicy", !"CANCELLED".equals(a.get("execution_status")));
+        long share = ((Number)b.get("total_amount")).longValue() / ((Number)b.get("required_staff_count")).longValue();
+        if (a.get("cash_collection_amount") instanceof Number cashShare) share=cashShare.longValue();
+        long net = java.math.BigDecimal.valueOf(share).multiply(java.math.BigDecimal.valueOf(80)).divide(java.math.BigDecimal.valueOf(100),0,java.math.RoundingMode.DOWN).longValueExact();
+        value.put("platformFee", share-net);
+        value.put("netIncome", net);
+        value.put("cashCollectionAmount", share);
+        value.put("cashReceivedAt", instant(a.get("cash_received_at")));
+        value.put("incomePendingPolicy", false);
         value.put("cancellationReason", a.get("cancellation_reason"));
         value.put("responseTimedOut", "Hết thời gian nhận đơn".equals(a.get("cancellation_reason")));
         value.put("bookingStatus", b.get("status"));
@@ -313,10 +326,12 @@ public class BookingWorkflowService {
             transition(b, "CONFIRMED", staff, "STAFF", "Đã đủ nhân viên xác nhận ca.");
         else
             transition(b, "MATCHING", staff, "STAFF", "Nhân viên đã nhận một vị trí, tiếp tục tìm nhân viên.");
+        if ("CASH".equals(b.get("payment_method")) && finance != null) finance.reserve(id, staff);
         return assignmentView(staff, row(id, false));
     }
 
     void transition(Map<String, Object> b, String next, long user, String role, String reason) {
+        if (finance != null && ("CASH".equals(b.get("payment_method")) || "COMPLETED".equals(next))) finance.enqueue(((Number)b.get("id")).longValue());
         repository.transitionUpdateBookings(next, b.get("id"));
         repository.transitionInsertBookingStatusHistories(b.get("id"), b.get("status"), next, "SYSTEM".equals(role) ? null : user, role, reason);
         repository.transitionInsertOutboxEvents(b.get("id"), next, json.writeValueAsString(Map.of("bookingId", b.get("id"), "customerId", b.get("customer_id"), "status", next, "oldStatus", b.get("status"), "reason", reason)));
@@ -344,6 +359,13 @@ public class BookingWorkflowService {
             throw error(HttpStatus.CONFLICT, "Đơn chưa đủ nhân viên xác nhận. Vui lòng chờ đủ vị trí trước khi thực hiện ca.");
         if (next.equals("CANCELLED") && b.get("started_at") != null)
             throw error(HttpStatus.CONFLICT, "Ca đã bắt đầu thực hiện. Hãy báo cáo sự cố để Admin xử lý thay vì tự hủy và tìm người thay thế.");
+        if (next.equals("COMPLETED") && !repository.completionEvidence(((Number)a.get("id")).longValue()))
+            throw error(HttpStatus.CONFLICT,"Cần gửi tối thiểu 2 ảnh minh chứng: ít nhất 1 ảnh trước và 1 ảnh sau khi thực hiện dịch vụ. Ảnh phải được lưu và gửi vào chat của đơn trước khi hoàn thành.");
+        if (next.equals("COMPLETED") && "CASH".equals(b.get("payment_method"))) {
+            if (!Boolean.TRUE.equals(body.get("cashReceived"))) throw error(HttpStatus.CONFLICT,"Bạn đã thu đủ tiền mặt của khách hàng cho phần việc của mình chưa? Cần xác nhận đã thu trước khi hoàn thành ca.");
+            if (finance != null) finance.reserve(id, staff);
+            repository.confirmCashCollection(((Number)a.get("id")).longValue());
+        }
         String assignmentState = next.equals("COMPLETED") ? "COMPLETED" : next.equals("CANCELLED") ? "CANCELLED" : "ACCEPTED";
         repository.progressUpdateBookingAssignments(next, assignmentState, a.get("id"));
         if (next.equals("IN_PROGRESS")) {
@@ -402,7 +424,7 @@ public class BookingWorkflowService {
         owned(actor, b);
         if ("CANCELLED".equals(b.get("status")))
             return bookingView(b);
-        if (b.get("started_at") != null || !List.of("PENDING", "MATCHING", "CONFIRMED", "ACCEPTED", "STAFF_ASSIGNED").contains(b.get("status")))
+        if (b.get("started_at") != null || !List.of("PENDING", "AWAITING_PAYMENT", "MATCHING", "CONFIRMED", "ACCEPTED", "STAFF_ASSIGNED").contains(b.get("status")))
             throw error(HttpStatus.CONFLICT, "Đơn không còn được hủy ở trạng thái này.");
         String reason = text(body, "reason", 2000, true);
         repository.cancelUpdateBookings(reason, actor.get("id"), actor.get("role"), id);
