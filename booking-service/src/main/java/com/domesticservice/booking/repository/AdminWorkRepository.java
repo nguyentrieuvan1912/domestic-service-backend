@@ -17,9 +17,5 @@ public class AdminWorkRepository {
    SELECT 'booking:'||id,status,'bookings','/admin/bookings','Đơn cần điều phối '||booking_code,
     CASE status WHEN 'NO_STAFF_FOUND' THEN 'Chưa tìm được nhân viên' WHEN 'ABSENT' THEN 'Cần xử lý nhân viên vắng mặt' ELSE 'Đang chờ nhận / ghép nhân viên' END
    FROM bookings WHERE status IN ('PENDING','MATCHING','NO_STAFF_FOUND','ABSENT')
-   UNION ALL
-   SELECT 'settlement:'||id,status||':'||payment_status,'transactions','/admin/transactions?section=reconciliation','Đơn hoàn thành chờ quyết toán '||booking_code,
-    CASE WHEN payment_method='CASH' AND payment_status<>'PAID' THEN 'Cần xác nhận tiền mặt trước khi quyết toán' ELSE 'Kiểm tra thanh toán và quyết toán thu nhập' END
-   FROM bookings WHERE status='COMPLETED'
    """);}
 }

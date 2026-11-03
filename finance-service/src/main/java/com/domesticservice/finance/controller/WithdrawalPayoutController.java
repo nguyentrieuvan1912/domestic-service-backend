@@ -8,11 +8,15 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/v1/finance")
 public class WithdrawalPayoutController {
     private final WithdrawalPayoutService service;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.domesticservice.finance.service.BankAccountLookupService lookup;
     public WithdrawalPayoutController(WithdrawalPayoutService service){this.service=service;}
     @GetMapping("/withdrawal-capabilities")
     public Map<String,Object> capabilities(@RequestHeader(value="Authorization",required=false) String token){return service.capabilities(token);}
     @GetMapping("/payout-banks")
     public List<Map<String,Object>> banks(@RequestHeader(value="Authorization",required=false) String token){return service.banks(token);}
+    @PostMapping("/staff/me/bank-accounts/lookup")
+    public Map<String,Object> lookup(@RequestHeader(value="Authorization",required=false) String token,@RequestBody Map<String,Object> body){return lookup.lookup(token,body);}
     @GetMapping("/admin/payouts/connection")
     public Map<String,Object> connection(@RequestHeader(value="Authorization",required=false) String token){return service.connection(token);}
     @PostMapping("/admin/withdrawals/{id}/payout")

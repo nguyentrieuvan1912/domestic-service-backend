@@ -55,6 +55,8 @@ public class BookingChatService {
             item.put("createdAt", instant(c.get("created_at")));
             item.put("customerDeletedThroughId", "CUSTOMER".equals(user.get("role")) ? c.get("customer_deleted_through_id") : 0);
             item.put("customerTrashedAt", c.get("customer_trashed_at") == null ? null : instant(c.get("customer_trashed_at")));
+            Object trashedAt = "CUSTOMER".equals(user.get("role")) ? c.get("customer_trashed_at") : c.get("completed_archive_at");
+            item.put("trashedAt", trashedAt == null ? null : instant(trashedAt));
             item.put("lastMessage", Objects.toString(c.get("last_content"), ""));
             item.put("lastMessageTime", instant(c.get("last_sent_at") == null ? c.get("created_at") : c.get("last_sent_at")));
             item.put("unreadCountCustomer", c.get("customer_unread"));

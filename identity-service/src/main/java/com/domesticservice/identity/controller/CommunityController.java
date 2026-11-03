@@ -31,6 +31,11 @@ public class CommunityController {
         return service.create(token, b);
     }
 
+    @GetMapping("/community/posts/requests/{requestKey}")
+    public Map<String,Object> confirmPost(@RequestHeader(value="Authorization",required=false) String token,@PathVariable String requestKey) {
+        return service.confirmPost(token,requestKey);
+    }
+
     @PostMapping("/community/posts/{id}/comments")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> comment(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id, @RequestBody Map<String, Object> b) {

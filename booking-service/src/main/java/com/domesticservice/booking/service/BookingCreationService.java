@@ -47,8 +47,8 @@ public class BookingCreationService {
         Instant start = parseTime(text(body, "startsAt", 50, true));
         CustomerBookingTimePolicy.validate(start, Instant.now());
         String method = text(body, "paymentMethod", 30, true);
-        if (!"CASH".equals(method))
-            throw error(HttpStatus.SERVICE_UNAVAILABLE, "Thanh toán trực tuyến cần cấu hình PayOS/VietQR và xác minh giao dịch trước khi tạo đơn. Bạn có thể chọn tiền mặt nếu dịch vụ hỗ trợ.");
+        if (!List.of("CASH","BANK_TRANSFER_QR","WALLET").contains(method))
+            throw error(HttpStatus.BAD_REQUEST, "Phương thức thanh toán không hợp lệ.");
         String mode = text(body, "mode", 10, true);
         if (!List.of("MODE_A", "MODE_B").contains(mode))
             throw error(HttpStatus.BAD_REQUEST, "Hình thức đặt không hợp lệ.");
@@ -89,7 +89,7 @@ public class BookingCreationService {
                 for (var related : maps(snapshot.getOrDefault("relatedServices", List.of()))) if (!flow.eligibility(staff, candidate(((Number) related.get("id")).longValue(), start, end, address), selectedProfile).isEmpty())
                     throw error(HttpStatus.CONFLICT, "Nhân viên chưa đủ điều kiện thực hiện dịch vụ kèm theo. Vui lòng chọn lại dịch vụ bổ sung.");
             }
-            long created = repository.createInsertBookings("BK-" + LocalDate.now(ZONE).toString().replace("-", "") + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(Locale.ROOT), mode, customer, quote.get("serviceId"), quote.get("packageId"), addressId, quote.get("id"), json.writeValueAsString(snapshot), json.writeValueAsString(address), Timestamp.from(start), Timestamp.from(end), snapshot.get("requiredStaffCount"), quote.get("baseAmount"), quote.get("addOnAmount"), quote.get("discountAmount"), quote.get("totalAmount"), snapshot.get("promotionId"), snapshot.get("promotionCode"), text(body, "notes", 2000, false), key, hash);
+            long created = repository.createInsertBookings("BK-" + LocalDate.now(ZONE).toString().replace("-", "") + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(Locale.ROOT), mode, customer, quote.get("serviceId"), quote.get("packageId"), addressId, quote.get("id"), json.writeValueAsString(snapshot), json.writeValueAsString(address), Timestamp.from(start), Timestamp.from(end), snapshot.get("requiredStaffCount"), quote.get("baseAmount"), quote.get("addOnAmount"), quote.get("discountAmount"), quote.get("totalAmount"), snapshot.get("promotionId"), snapshot.get("promotionCode"), method, text(body, "notes", 2000, false), key, hash);
             for (var add : maps(snapshot.get("addOns"))) repository.createInsertBookingAddOns(created, add.get("id"), add.get("name"), add.get("price"), add.get("durationMinutes"), add.get("price"));
             if (staff > 0)
                 repository.createInsertBookingAssignments(created, staff, json.writeValueAsString(selectedProfile));
@@ -107,7 +107,7 @@ public class BookingCreationService {
                 if ("CANCELLED".equals(before.get("status")))
                     throw error(HttpStatus.CONFLICT, "Đơn đã được hủy.");
                 repository.createUpdateBookings(id);
-                flow.transition(before, mode.equals("MODE_A") ? "STAFF_ASSIGNED" : "MATCHING", customer, "CUSTOMER", "Đã xác nhận báo giá, chờ nhân viên tiếp nhận.");
+                flow.transition(before, !method.equals("CASH") ? "AWAITING_PAYMENT" : mode.equals("MODE_A") ? "STAFF_ASSIGNED" : "MATCHING", customer, "CUSTOMER", "Đã xác nhận báo giá, chờ nhân viên tiếp nhận.");
                 repository.createUpdateOutboxEvents(id);
             });
         } catch (RuntimeException ex) {

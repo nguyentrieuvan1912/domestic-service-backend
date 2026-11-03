@@ -89,6 +89,8 @@ public class StaffResponseService {
                 repository.decideUpdateBookings(reason, customer, id);
                 flow.transition(b, "CANCELLED", customer, "CUSTOMER", reason);
             } else {
+                if (!"CASH".equals(b.get("payment_method")))
+                    throw error(HttpStatus.CONFLICT,"Đơn trả trước đã hết thời gian nhận và được hoàn về ví. Vui lòng đặt lại để thanh toán bằng số dư ví.");
                 var profile = ops.identityClient().list("/api/v1/identity/staff-directory", token).stream().filter(p -> ServiceHttpClient.userId(p) == staff).findFirst().orElse(null);
                 var candidate = new LinkedHashMap<>(b);
                 candidate.put("booking_mode", "MODE_B");

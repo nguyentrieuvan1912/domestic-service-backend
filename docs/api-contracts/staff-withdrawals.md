@@ -1,5 +1,29 @@
 # Staff withdrawal payouts
 
+## Automatic payOS withdrawals (V11)
+
+`PAYOS_PAYOUT_AUTOMATIC=true`, `PAYOS_PAYOUT_ENABLED=true` and `SEPAY_ENABLED=false` enable automatic dispatch for **new** staff requests only. Existing pending/approved requests are never enrolled by changing configuration. The source must match the configured account/name and its signed balance must cover the request before a durable payout intent is created. Service credit and provider approval policies still apply; provider order creation is not proof of bank receipt.
+
+`GET /withdrawal-capabilities` adds `mode=PAYOS_AUTOMATIC`, `requiresAdminApproval=false`, and `automaticNameLookup` based on configured Pay2S access. Missing keys do not imply a working provider connection.
+
+New requests atomically reserve funds, record `automatic_requested=true`, and become `APPROVED` with no fabricated admin approver. A worker sends queued requests every 15 seconds. Initiator is the requesting staff ID. Unique intent/reference/idempotency constraints and wallet/withdrawal locks permit at most one POST even across concurrent jobs. Once an intent exists, timeouts and retries use lookup only. Source outages/insufficient balance retain the unsent request; staff can cancel an automatic `APPROVED` request only while no payout intent exists. Cancellation and dispatch use the same locks. DTOs expose `automaticRequested` and a waiting message for queued automatic requests.
+
+### Recipient lookup
+
+V12 adds selectable `BANK_LOOKUP_PROVIDER=BANKLOOKUP|PAY2S`. BankLookup uses backend-only `BANKLOOKUP_API_KEY` and `BANKLOOKUP_API_SECRET`, the documented Production `POST https://api.banklookup.net/`, and its public `/bank/list` directory to map BIN to provider code. Only a unique directory entry with `lookup_supported=1` is accepted. Credit/authorization/not-found/network errors never produce a verification. The documented lookup response may contain only `ownerName`: the stored proof keeps the exact outbound request context separately from the provider response and does not fabricate echoed bank/account fields. Provider-scoped cache prevents reusing a Pay2S proof after switching providers. Verification history records the actual provider.
+
+`bankLinkRequiresLookup=true` in automatic mode forces server lookup and read-only name entry, including while provider keys are absent. Bank save returns503 if the automatic lookup service is not configured; it does not fall back to a manually entered name/admin review. Existing historical manual reviews are preserved. Selecting BankLookup never falls back to sending recipient details to Pay2S.
+
+Provider source: https://banklookup.net/document/lookup and https://banklookup.net/document/bank-list. Production bank directory was read successfully; recipient lookup requires a funded/trial account and has not been confirmed merely by passing local tests.
+
+Backend-only `PAY2S_SECRET_KEY` is the raw Secret Key from Pay2S Website/Application integration. The server Base64-encodes it once for `pay2s-token`. No key goes to mobile/web.
+
+STAFF `POST /staff/me/bank-accounts/lookup` accepts `{bankCode,accountNumber}` and returns `{bankCode,accountNumber,accountHolder,provider:"PAY2S"}` only after a real successful provider response matching the exact BIN and account. Leading zeroes are preserved. Proofs are cached per authenticated staff/BIN/account for 15 minutes; a shared database limiter allows ten upstream calls per minute across all users/instances. Provider failures consume reserved rate-limit attempts but never create a verification proof.
+
+When lookup is configured, bank save resolves the provider proof server-side and rejects a conflicting supplied name; it never trusts a client verification flag. It saves `VERIFIED`, `verification_provider=PAY2S`, authenticated staff ownership and an immutable provider verification audit. There is no invented admin ID. Admin bank history includes these provider verifications alongside manual reviews. When lookup is unconfigured, the existing manual input/review path remains explicitly labeled in the UI.
+
+References: https://developer.pay2s.vn/docs/get-recipient-name/tai-lieu-ky-thuat/ and https://payos.vn/docs/api/.
+
 Finance V6 adds withdrawal_payouts and append-only payout_money_entries, and manual bank-verification audit fields.
 Existing request/approval endpoints remain. An approved request never initiates a transfer just because configuration is later enabled.
 
@@ -101,3 +125,7 @@ Existing verified/inactive account metadata is imported once during V9 only wher
 Finance locks wallet then withdrawal, matching approval/payout lock order. The transaction moves the exact request amount from RESERVED to AVAILABLE, adds the two immutable RELEASE ledger entries with the existing withdrawal release idempotency keys, records CANCELLED/cancelledBy/cancelledAt/cancellationReason (V10), and creates one staff outbox notification. Replaying an already-cancelled request succeeds without repeating credit or notification. Insufficient reserves or a ledger failure rolls back the entire operation. Total earned and withdrawn amounts do not increase.
 
 Response: id,status=CANCELLED,amount. Wallet/Admin withdrawal records expose cancellationReason,cancelledAt,cancelledBy. The mobile reserved-funds card lists a cancel action only for PENDING requests and refreshes the real wallet after the server confirms cancellation; no optimistic balance arithmetic. Admin's inbox queue excludes cancelled work on the next sync, while the cancellation remains visible in history.
+
+### Payout check visibility
+
+Staff wallet and Admin withdrawal rows additionally return `payoutCheckedAt` (last provider check attempt) and `payoutTransactionState` (state from the last signed provider proof). A failed check retains the previous proof and balances; the message reports the failed lookup and automatic retry. Neither check time nor an assigned bank reference means PAID. Staff history combines ledger and withdrawal records by source timestamp descending.

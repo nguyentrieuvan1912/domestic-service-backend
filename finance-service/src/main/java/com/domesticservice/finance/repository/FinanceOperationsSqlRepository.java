@@ -34,7 +34,7 @@ public class FinanceOperationsSqlRepository {
     }
 
     public List<Map<String, Object>> walletFindWithdrawals(Object... args) {
-        return db.queryForList("SELECT w.id,w.amount,w.status,w.requested_at AS \"requestedAt\",w.rejection_reason AS \"rejectionReason\",w.cancellation_reason AS \"cancellationReason\",w.cancelled_at AS \"cancelledAt\",w.cancelled_by AS \"cancelledBy\",p.provider AS \"payoutProvider\",p.status AS \"payoutStatus\",p.message AS \"payoutMessage\" FROM withdrawals w LEFT JOIN withdrawal_payouts p ON p.withdrawal_id=w.id WHERE w.staff_id=? ORDER BY w.id DESC", args);
+        return db.queryForList("SELECT w.id,w.amount,w.status,w.requested_at AS \"requestedAt\",w.automatic_requested AS \"automaticRequested\",w.rejection_reason AS \"rejectionReason\",w.cancellation_reason AS \"cancellationReason\",w.cancelled_at AS \"cancelledAt\",w.cancelled_by AS \"cancelledBy\",p.provider AS \"payoutProvider\",p.status AS \"payoutStatus\",p.checked_at AS \"payoutCheckedAt\",p.provider_proof->'transactions'->0->>'state' AS \"payoutTransactionState\",coalesce(p.message,CASE WHEN w.automatic_requested AND w.status='APPROVED' THEN 'Đã lưu yêu cầu tự động; đang chờ nguồn chi đủ tiền và gửi lệnh payOS.' END) AS \"payoutMessage\" FROM withdrawals w LEFT JOIN withdrawal_payouts p ON p.withdrawal_id=w.id WHERE w.staff_id=? ORDER BY w.id DESC", args);
     }
 
     public List<Map<String, Object>> banksFindStaffBankAccounts(Object... args) {
@@ -82,26 +82,26 @@ public class FinanceOperationsSqlRepository {
     }
 
     public List<Map<String, Object>> adminBanksFindStaffBankAccounts(Object... args) {
-        return db.queryForList("SELECT id,staff_id AS \"staffId\",bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",status,verified_at AS \"verifiedAt\",verified_by AS \"verifiedBy\",(SELECT r.admin_name FROM bank_account_reviews r WHERE r.bank_account_id=staff_bank_accounts.id ORDER BY r.id DESC LIMIT 1) AS \"verifiedByName\",verification_note AS \"verificationNote\" FROM staff_bank_accounts ORDER BY id DESC", args);
+        return db.queryForList("SELECT id,staff_id AS \"staffId\",bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",status,verification_provider AS \"verificationProvider\",verified_at AS \"verifiedAt\",verified_by AS \"verifiedBy\",(SELECT r.admin_name FROM bank_account_reviews r WHERE r.bank_account_id=staff_bank_accounts.id ORDER BY r.id DESC LIMIT 1) AS \"verifiedByName\",verification_note AS \"verificationNote\" FROM staff_bank_accounts ORDER BY id DESC", args);
     }
 
     public boolean withdrawalHasPayout(long id){return Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM withdrawal_payouts WHERE withdrawal_id=?)",Boolean.class,id));}
     public int releaseCancelledWithdrawal(long balance,long staff,long amount){return db.update("UPDATE staff_balances SET reserved_balance=reserved_balance-?,available_balance=available_balance+?,version=version+1,updated_at=now() WHERE id=? AND staff_id=? AND reserved_balance>=?",amount,amount,balance,staff,amount);}
-    public int cancelPendingWithdrawal(long id,long staff){return db.update("UPDATE withdrawals SET status='CANCELLED',cancelled_by=?,cancelled_at=now(),cancellation_reason='Nhân viên hủy yêu cầu trước khi Admin duyệt.' WHERE id=? AND staff_id=? AND status='PENDING'",staff,id,staff);}
+    public int cancelPendingWithdrawal(long id,long staff){return db.update("UPDATE withdrawals SET status='CANCELLED',cancelled_by=?,cancelled_at=now(),cancellation_reason='Nhân viên hủy yêu cầu trước khi gửi lệnh chuyển tiền.' WHERE id=? AND staff_id=? AND (status='PENDING' OR (status='APPROVED' AND automatic_requested=true)) AND NOT EXISTS(SELECT 1 FROM withdrawal_payouts p WHERE p.withdrawal_id=withdrawals.id)",staff,id,staff);}
 
     public List<Map<String,Object>> bankForReview(long id){return db.queryForList("SELECT * FROM staff_bank_accounts WHERE id=? FOR UPDATE",id);}
-    public List<Map<String,Object>> bankReviewHistory(long id){return db.queryForList("SELECT id,admin_id AS \"adminId\",admin_name AS \"adminName\",old_status AS \"oldStatus\",new_status AS \"newStatus\",bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",verification_note AS \"verificationNote\",legacy,reviewed_at AS \"reviewedAt\" FROM bank_account_reviews WHERE bank_account_id=? ORDER BY id DESC",id);}
+    public List<Map<String,Object>> bankReviewHistory(long id){return db.queryForList("SELECT id,admin_id AS \"adminId\",admin_name AS \"adminName\",old_status AS \"oldStatus\",new_status AS \"newStatus\",bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",verification_note AS \"verificationNote\",legacy,reviewed_at AS \"reviewedAt\" FROM bank_account_reviews WHERE bank_account_id=? UNION ALL SELECT -v.id,NULL,p.provider || ' (tự động)',NULL,'VERIFIED',p.bank_code,p.account_number,p.account_holder,'Tên người nhận được tra cứu qua API ' || p.provider || '.',false,v.verified_at FROM bank_provider_verifications v JOIN bank_lookup_proofs p ON p.id=v.proof_id WHERE v.bank_account_id=? ORDER BY \"reviewedAt\" DESC,id DESC",id,id);}
     public long insertBankReview(Map<String,Object> bank,long admin,String adminName,String status,String note){
         return insert("INSERT INTO bank_account_reviews(bank_account_id,staff_id,admin_id,admin_name,old_status,new_status,bank_code,account_number,account_holder,verification_note) VALUES (?,?,?,?,?,?,?,?,?,?)",
           bank.get("id"),bank.get("staff_id"),admin,adminName,bank.get("status"),status,bank.get("bank_code"),bank.get("account_number"),bank.get("account_holder"),note);
     }
 
     public int verifyBankUpdateStaffBankAccounts(Object... args) {
-        return db.update("UPDATE staff_bank_accounts SET status=?,verification_note=?,verified_by=?,verified_at=now() WHERE id=?", args);
+        return db.update("UPDATE staff_bank_accounts SET status=?,verification_note=?,verified_by=?,verified_at=now(),verification_provider='MANUAL' WHERE id=?", args);
     }
 
     public List<Map<String, Object>> withdrawalsFindWithdrawals(Object... args) {
-        return db.queryForList("SELECT w.id,w.staff_id AS \"staffId\",w.amount,w.status,w.requested_at AS \"requestedAt\",w.approved_at AS \"approvedAt\",w.bank_account_snapshot::text AS \"bankAccount\",w.rejection_reason AS \"rejectionReason\",w.cancellation_reason AS \"cancellationReason\",w.cancelled_at AS \"cancelledAt\",w.cancelled_by AS \"cancelledBy\",p.provider AS \"payoutProvider\",p.status AS \"payoutStatus\",p.message AS \"payoutMessage\" FROM withdrawals w LEFT JOIN withdrawal_payouts p ON p.withdrawal_id=w.id ORDER BY w.id DESC", args);
+        return db.queryForList("SELECT w.id,w.staff_id AS \"staffId\",w.amount,w.status,w.requested_at AS \"requestedAt\",w.automatic_requested AS \"automaticRequested\",w.approved_at AS \"approvedAt\",w.bank_account_snapshot::text AS \"bankAccount\",w.rejection_reason AS \"rejectionReason\",w.cancellation_reason AS \"cancellationReason\",w.cancelled_at AS \"cancelledAt\",w.cancelled_by AS \"cancelledBy\",p.provider AS \"payoutProvider\",p.status AS \"payoutStatus\",p.checked_at AS \"payoutCheckedAt\",p.provider_proof->'transactions'->0->>'state' AS \"payoutTransactionState\",coalesce(p.message,CASE WHEN w.automatic_requested AND w.status='APPROVED' THEN 'Đã lưu yêu cầu tự động; đang chờ nguồn chi đủ tiền và gửi lệnh payOS.' END) AS \"payoutMessage\" FROM withdrawals w LEFT JOIN withdrawal_payouts p ON p.withdrawal_id=w.id ORDER BY w.id DESC", args);
     }
 
     public List<Map<String, Object>> reviewWithdrawalFindWithdrawalsForUpdate(Object... args) {
@@ -191,7 +191,7 @@ public class FinanceOperationsSqlRepository {
     }
 
     public <T> T settleFindPayments(Class<T> type, Object... args) {
-        return db.queryForObject("SELECT coalesce(sum(amount),0) FROM payments WHERE booking_id=? AND status='PAID'", type, args);
+        return db.queryForObject("SELECT coalesce(sum(p.amount-coalesce((SELECT sum(r.amount) FROM refunds r WHERE r.payment_id=p.id AND r.status='PROCESSED'),0)),0) FROM payments p WHERE p.booking_id=? AND p.status='PAID'", type, args);
     }
 
     public <T> List<T> settleFindFinanceSettings(Class<T> type, Object... args) {
@@ -225,6 +225,8 @@ public class FinanceOperationsSqlRepository {
     public int settleUpdateStaffBalances(Object... args) {
         return db.update("UPDATE staff_balances SET available_balance=available_balance+?,total_earned=total_earned+?,version=version+1,updated_at=now() WHERE id=?", args);
     }
+
+    public long cashJobShare(long booking,long staff) { return db.queryForObject("SELECT amount FROM cash_job_debits WHERE booking_id=? AND staff_id=? AND status IN ('DEBITED','SETTLED')",Long.class,booking,staff); }
 
     public int settleUpdatePayments(Object... args) {
         return db.update("UPDATE payments SET order_id=? WHERE booking_id=? AND status='PAID'", args);

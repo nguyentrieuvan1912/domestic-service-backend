@@ -24,6 +24,15 @@ public class WithdrawalPayoutService {
     private final TransactionTemplate tx;
     private final ObjectMapper json;
     private SepayDisbursementService manual;
+    private BankAccountLookupService lookup;
+    private boolean automatic;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void bankLookup(BankAccountLookupService lookup){this.lookup=lookup;}
+    @Value("${payments.payout.automatic:false}")
+    public void automatic(boolean automatic){this.automatic=automatic;}
+    public boolean automaticEnabled(){return automatic && !(manual!=null && manual.enabled());}
+    public boolean automaticReady(){return automaticEnabled() && config.ready();}
+    public void queueAutomatic(long id){repo.queueAutomatic(id);}
     @org.springframework.beans.factory.annotation.Autowired(required=false)
     public void manualDisbursement(SepayDisbursementService manual){this.manual=manual;}
     public WithdrawalPayoutService(WithdrawalPayoutRepository repo,PayosPayoutClient provider,PayoutProperties config,
@@ -33,8 +42,9 @@ public class WithdrawalPayoutService {
     public Map<String,Object> capabilities(String token) {
         identity.authenticate(token,"STAFF","ADMIN");
         if(manual!=null && manual.enabled())return manual.capabilities();
-        return Map.of("configured",config.ready(),"minimum",config.minimum(),"maximum",config.maximum(),"requiresAdminApproval",true,
-            "automaticNameLookup",false,"message",config.ready()?"Kênh chi đã được cấu hình; mỗi yêu cầu cần duyệt và xác minh kết quả chuyển tiền.":"Chưa cấu hình đầy đủ Kênh chi payOS. Yêu cầu rút chưa thể chuyển tự động.");
+        return Map.of("configured",config.ready(),"minimum",config.minimum(),"maximum",config.maximum(),"requiresAdminApproval",!automaticEnabled(),
+            "automaticNameLookup",lookup!=null && lookup.ready(),"bankLinkRequiresLookup",automaticEnabled(),"mode",automaticEnabled()?"PAYOS_AUTOMATIC":"PAYOS_MANUAL",
+            "message",config.ready()?(automaticEnabled()?"Yêu cầu rút được tự động tạo lệnh chi, không cần Admin duyệt. Chỉ báo đã chuyển khi payOS xác nhận thành công.":"Kênh chi đã được cấu hình; mỗi yêu cầu cần duyệt và xác minh kết quả chuyển tiền."):"Chưa cấu hình đầy đủ Kênh chi payOS. Yêu cầu rút chưa thể chuyển tự động.");
     }
     public List<Map<String,Object>> banks(String token){identity.authenticate(token,"STAFF","ADMIN");return directory.banks();}
     public Map<String,Object> connection(String token) {
@@ -45,12 +55,16 @@ public class WithdrawalPayoutService {
     }
     public Map<String,Object> dispatch(String token,long id,boolean confirmed) {
         long admin=ServiceHttpClient.userId(identity.authenticate(token,"ADMIN"));
+        return dispatchInternal(admin,id,confirmed,false);
+    }
+    private Map<String,Object> dispatchInternal(long actor,long id,boolean confirmed,boolean automaticRequest) {
         var previous=repo.find(id);
         if(previous!=null && "SEPAY".equals(previous.get("provider")))throw conflict("Yêu cầu đã khóa cho chuyển khoản TPBank. Không gửi chi payOS.");
         if(previous==null && manual!=null && manual.enabled())throw conflict("Đang dùng TPBank/SePay. Mở QR chuyển khoản tại yêu cầu đã duyệt.");
         if(!confirmed) throw conflict("Cần xác nhận gửi lệnh chi thực tế.");
         provider.requireReady();
         var w=requireWithdrawal(id);
+        if(automaticRequest && (!automaticReady() || !Boolean.TRUE.equals(w.get("automatic_requested"))))throw conflict("Yêu cầu không được đăng ký chi tự động.");
         if(repo.find(id)!=null) return refreshInternal(id);
         var source=provider.source();
         long amount=n(w,"amount");
@@ -62,13 +76,13 @@ public class WithdrawalPayoutService {
         var prepared=tx.execute(state->{
             repo.lockWallet(n(w,"staff_id"));var locked=repo.lockWithdrawal(id);
             var old=repo.find(id);if(old!=null) return Map.of("created",false,"payout",old);
-            if(!"APPROVED".equals(locked.get("status"))) throw conflict("Chỉ gửi chi yêu cầu đã được admin duyệt.");
+            if(!"APPROVED".equals(locked.get("status"))) throw conflict("Yêu cầu chưa đủ điều kiện gửi lệnh chi.");
             var bank=repo.bank(n(locked,"bank_account_id"));
             if(!"VERIFIED".equals(bank.get("status")) || bank.get("verified_at")==null || Objects.toString(bank.get("verification_note"),"").isBlank()
                 || !Objects.equals(bank.get("staff_id"),locked.get("staff_id"))
                 || !Objects.equals(bank.get("bank_code"),snapshot.get("bank_code")) || !Objects.equals(bank.get("account_number"),snapshot.get("account_number"))
                 || !Objects.equals(bank.get("account_holder"),snapshot.get("account_holder"))) throw conflict("Tài khoản nhận cần được đối chiếu và xác minh lại trước khi chi.");
-            return Map.of("created",true,"payout",repo.intent(id,admin));
+            return Map.of("created",true,"payout",repo.intent(id,actor));
         });
         if(!Boolean.TRUE.equals(prepared.get("created"))) return refreshInternal(id);
         // Intent/attempt is durable before HTTP. An ambiguous result is lookup-only, never re-posted.
@@ -91,8 +105,14 @@ public class WithdrawalPayoutService {
         var p=repo.find(id);
         if(p!=null && !"PAYOS".equals(p.get("provider")))throw conflict("Yêu cầu thuộc kênh TPBank/SePay. Không đối soát qua payOS.");
         if(p!=null && !List.of("PAID","FAILED").contains(p.get("status"))) {
-            var proof=provider.find(p.get("reference_id").toString());
-            if(proof!=null) reconcile(id,proof);
+            try {
+                var proof=provider.find(p.get("reference_id").toString());
+                if(proof!=null) reconcile(id,proof);
+                else repo.checkUnavailable(n(p,"id"));
+            } catch(RuntimeException ex) {
+                repo.checkUnavailable(n(p,"id"));
+                throw ex;
+            }
         }
         return view(id);
     }
@@ -128,7 +148,11 @@ public class WithdrawalPayoutService {
                 }else if("FAILED".equals(status) && List.of("FAILED","COMPLETED").contains(approval)) {
                     next="FAILED";message="payOS xác nhận giao dịch thất bại; đã hoàn khoản giữ.";
                 }else if(List.of("RECEIVED","PROCESSING","ON_HOLD").contains(status)) {
-                    next="PROCESSING";message="Lệnh chi đang xử lý hoặc chờ phê duyệt tại payOS.";
+                    next="PROCESSING";message=switch(status) {
+                        case "RECEIVED" -> "payOS đã nhận lệnh, chưa xác nhận chuyển tiền. Hệ thống tự kiểm tra lại mỗi 30 giây.";
+                        case "ON_HOLD" -> "payOS đang tạm giữ lệnh chi. Cần kiểm tra lệnh trên payOS; chưa có xác nhận chuyển thành công.";
+                        default -> "payOS/ngân hàng vẫn trả trạng thái Đang xử lý, chưa xác nhận chuyển thành công. Hệ thống tự kiểm tra lại mỗi 30 giây.";
+                    };
                 }
             }
             repo.observation(n(p,"id"),next,match?providerId:null,json.writeValueAsString(proof),message);
@@ -138,6 +162,12 @@ public class WithdrawalPayoutService {
     }
     @Scheduled(fixedDelay=30000,initialDelay=30000)
     public void reconcilePending(){if(config.ready()) for(long id:repo.pending())try{refreshInternal(id);}catch(RuntimeException ignored){/* Durable hold remains; no blind resubmission. */}}
+    @Scheduled(fixedDelay=15000,initialDelay=15000)
+    public void dispatchAutomatic(){
+        if(!automaticReady())return;
+        for(long id:repo.automaticQueue())try{dispatchInternal(n(requireWithdrawal(id),"staff_id"),id,true,true);}
+        catch(RuntimeException ignored){/* No intent: source/config will be retried; durable intent: lookup only. */}
+    }
     static long n(Map<String,Object> map,String key){if(!(map.get(key) instanceof Number n) || n.longValue()<0 || n.doubleValue()!=n.longValue())throw conflict("Dữ liệu số tiền không hợp lệ.");return n.longValue();}
     static ResponseStatusException conflict(String message){return new ResponseStatusException(HttpStatus.CONFLICT,message);}
 }

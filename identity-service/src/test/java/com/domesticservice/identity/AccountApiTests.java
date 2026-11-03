@@ -96,6 +96,19 @@ class AccountApiTests {
         assertThat(request("GET","/auth/profile",null,staff).body()).contains("https://res.cloudinary.com/test/image/upload/staff.png");
     }
 
+    @Test void postConfirmationRequiresPersistedRowAndCorrectOwner() throws Exception {
+        String customer=token(request("POST","/auth/register",registration(),null));
+        long owner=json.readTree(request("GET","/auth/me",null,customer).body()).get("id").asLong();
+        db.execute("CREATE TABLE community_posts(id BIGINT PRIMARY KEY,user_id BIGINT,status VARCHAR(20),request_key VARCHAR(160),request_hash VARCHAR(64))");
+        db.update("INSERT INTO community_posts VALUES (9001,?,'PENDING','post-confirmation','stored-hash')",owner);
+        var saved=request("GET","/community/posts/requests/post-confirmation",null,customer);
+        assertThat(saved.statusCode()).isEqualTo(200);
+        assertThat(saved.body()).contains("9001","PENDING");
+        assertThat(request("GET","/community/posts/requests/not-persisted",null,customer).statusCode()).isEqualTo(404);
+        assertThat(request("GET","/community/posts/requests/post-confirmation",null,admin).statusCode()).isEqualTo(404);
+        assertThat(request("GET","/community/posts/requests/post-confirmation",null,null).statusCode()).isEqualTo(401);
+    }
+
     @Test void customerAddressesRejectOutsideHcmEvenWithLegacyDistrict() throws Exception {
         String customer=token(request("POST","/auth/register",registration(),null));
         var body=new LinkedHashMap<String,Object>(Map.of("title","Nhà riêng","recipientName","Người nhận","recipientPhone","0900000002","streetAddress","123 Đường thử","district","Quận 1","city","Hà Nội"));

@@ -62,38 +62,68 @@ class BookingChatTrashPostgresTests {
         db.update("INSERT INTO messages(conversation_id,sender_id,sender_type,message_type,content,sent_at) VALUES (?,201,'STAFF','TEXT',?,now()-CAST(? AS interval))",conversation,content,age);
     }
     Map<String,Object> own(String token) {return chat.list(token).stream().filter(row->((Number)row.get("id")).longValue()==conversation).findFirst().orElseThrow();}
-    @Test void archivesWholeConversationUsingMostRecentMessageAndReopensOnNewMessage() {
-        message("old","2 days");message("recent","23 hours");
-        chat.archiveExpired();assertNull(own("Bearer customer").get("customerTrashedAt"));
-        db.update("UPDATE messages SET sent_at=now()-interval '25 hours' WHERE conversation_id=?",conversation);
-        chat.archiveExpired();assertNotNull(own("Bearer customer").get("customerTrashedAt"));
-        assertEquals(2,chat.messages("Bearer customer",conversation).size());
-        chat.send("Bearer staff",conversation,Map.of("content","new","clientKey",UUID.randomUUID().toString()));
-        assertNull(own("Bearer customer").get("customerTrashedAt"));
-        assertEquals(3,chat.messages("Bearer customer",conversation).size());
+    void complete(String age) {
+        db.update("UPDATE bookings SET status='COMPLETED',completed_at=now()-CAST(? AS interval) WHERE id=?",age,booking);
     }
-    @Test void permanentDeletionIsScopedAndDoesNotRestoreOldHistoryWhenNewMessageArrives() {
-        message("old one","26 hours");message("old two","25 hours");
-        chat.archiveExpired();
+    @Test void idleConversationOfActiveBookingNeverMovesToTrash() {
+        message("old","3 days");chat.archiveExpired();
+        assertNull(own("Bearer customer").get("customerTrashedAt"));
+        assertNull(own("Bearer staff").get("trashedAt"));
+        chat.send("Bearer staff",conversation,Map.of("content","still active","clientKey",UUID.randomUUID().toString()));
+        assertEquals(2,chat.messages("Bearer customer",conversation).size());
+    }
+    @Test void archivesFromCompletionEvenIfLastMessageIsRecentAndStaffReadsFirst() {
+        message("old","2 days");message("recent","1 hour");complete("25 hours");
+        assertNotNull(own("Bearer staff").get("trashedAt"));
+        var customer=own("Bearer customer");assertNotNull(customer.get("customerTrashedAt"));
+        assertEquals(customer.get("customerTrashedAt"),customer.get("trashedAt"));
+        var expected=db.queryForObject("SELECT completed_at+interval '24 hours' FROM bookings WHERE id=?",java.sql.Timestamp.class,booking).toInstant().toString();
+        assertEquals(expected,customer.get("trashedAt"));assertEquals(expected,own("Bearer staff").get("trashedAt"));
+        assertEquals(2,chat.messages("Bearer customer",conversation).size());
+        assertThrows(ResponseStatusException.class,()->chat.send("Bearer staff",conversation,Map.of("content","closed","clientKey",UUID.randomUUID().toString())));
+    }
+    @Test void recentCompletionKeepsEvenOldMessagesVisibleUntilTwentyFourHours() {
+        message("old","3 days");complete("23 hours");chat.archiveExpired();
+        assertNull(own("Bearer customer").get("trashedAt"));assertNull(own("Bearer staff").get("trashedAt"));
+        complete("24 hours");
+        assertNotNull(own("Bearer customer").get("trashedAt"));assertNotNull(own("Bearer staff").get("trashedAt"));
+    }
+    @Test void missingCompletionTimestampDoesNotGuessFromLastMessage() {
+        message("old","3 days");db.update("UPDATE bookings SET status='COMPLETED',completed_at=NULL WHERE id=?",booking);
+        chat.archiveExpired();assertNull(own("Bearer customer").get("trashedAt"));assertNull(own("Bearer staff").get("trashedAt"));
+    }
+    @Test void cancelledBookingIsNotTreatedAsCompleted() {
+        message("old","3 days");db.update("UPDATE bookings SET status='CANCELLED',cancelled_at=now()-interval '2 days' WHERE id=?",booking);
+        chat.archiveExpired();assertNull(own("Bearer customer").get("trashedAt"));assertNull(own("Bearer staff").get("trashedAt"));
+    }
+    @Test void permanentDeletionIsScopedAndPreservesStaffAndDatabaseHistory() {
+        message("old one","26 hours");message("old two","25 hours");complete("25 hours");chat.archiveExpired();
         assertThrows(ResponseStatusException.class,()->chat.deletePermanently("Bearer staff",conversation));
         assertThrows(ResponseStatusException.class,()->chat.deletePermanently("Bearer other",conversation));
-        chat.deletePermanently("Bearer customer",conversation);
+        chat.deletePermanently("Bearer customer",conversation);chat.archiveExpired();
         assertTrue(chat.list("Bearer customer").stream().noneMatch(row->((Number)row.get("id")).longValue()==conversation));
         assertTrue(chat.messages("Bearer customer",conversation).isEmpty());
         assertEquals(2,chat.messages("Bearer staff",conversation).size());
-        chat.send("Bearer staff",conversation,Map.of("content","fresh after deletion","clientKey",UUID.randomUUID().toString()));
-        assertNull(own("Bearer customer").get("customerTrashedAt"));
-        assertEquals(1,chat.messages("Bearer customer",conversation).size());
-        assertEquals(3,chat.messages("Bearer staff",conversation).size());
-        assertEquals("fresh after deletion",own("Bearer customer").get("lastMessage"));
-        assertEquals(1L,((Number)own("Bearer customer").get("unreadCountCustomer")).longValue());
-        assertThrows(ResponseStatusException.class,()->chat.deletePermanently("Bearer customer",conversation));
+        assertEquals(2,db.queryForObject("SELECT count(*) FROM messages WHERE conversation_id=?",Integer.class,conversation));
+        assertNotNull(own("Bearer staff").get("trashedAt"));
     }
-    @Test void emptyArchivedThreadStaysDeletedButItsFirstFutureMessageIsVisible() {
-        chat.archiveExpired();chat.deletePermanently("Bearer customer",conversation);chat.archiveExpired();
+    @Test void emptyCompletedConversationCanBeTrashedAndDeletedWithoutReappearing() {
+        complete("25 hours");chat.archiveExpired();assertNotNull(own("Bearer customer").get("trashedAt"));
+        chat.deletePermanently("Bearer customer",conversation);chat.archiveExpired();
         assertTrue(chat.list("Bearer customer").stream().noneMatch(row->((Number)row.get("id")).longValue()==conversation));
-        chat.send("Bearer staff",conversation,Map.of("content","first","clientKey",UUID.randomUUID().toString()));
-        assertEquals(1,chat.messages("Bearer customer",conversation).size());
-        assertEquals("first",own("Bearer customer").get("lastMessage"));
+        assertNotNull(own("Bearer staff").get("trashedAt"));
+    }
+    @Test void previousIdleDeadlineIsClearedWithoutRestoringDeletedHistory() {
+        message("previously deleted","3 days");
+        long cutoff=db.queryForObject("SELECT max(id) FROM messages WHERE conversation_id=?",Long.class,conversation);
+        db.update("UPDATE conversations SET customer_trashed_at=now()-interval '1 day',customer_deleted_at=now(),customer_deleted_through_id=? WHERE id=?",cutoff,conversation);
+        chat.archiveExpired();assertTrue(chat.messages("Bearer customer",conversation).isEmpty());
+        assertNull(db.queryForObject("SELECT customer_trashed_at FROM conversations WHERE id=?",java.sql.Timestamp.class,conversation));
+        assertEquals(cutoff,db.queryForObject("SELECT customer_deleted_through_id FROM conversations WHERE id=?",Long.class,conversation));
+        chat.send("Bearer staff",conversation,Map.of("content","active new message","clientKey",UUID.randomUUID().toString()));
+        assertNull(own("Bearer customer").get("trashedAt"));assertEquals(1,chat.messages("Bearer customer",conversation).size());
+    }
+    @Test void deletingBeforeDeadlineIsRejected() {
+        complete("23 hours");assertThrows(ResponseStatusException.class,()->chat.deletePermanently("Bearer customer",conversation));
     }
 }

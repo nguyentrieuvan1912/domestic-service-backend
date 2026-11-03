@@ -20,6 +20,15 @@ public class FinanceOperationsService {
     private final ServiceHttpClient identity, booking;
     private final PayoutBankDirectory payoutBanks;
     private final com.domesticservice.finance.config.PayoutProperties payoutConfig;
+    private BankAccountLookupService bankLookup;
+    private WithdrawalPayoutService payouts;
+    private CustomerWalletService customerWallet;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void customerWallet(CustomerWalletService customerWallet){this.customerWallet=customerWallet;}
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void bankLookup(BankAccountLookupService bankLookup){this.bankLookup=bankLookup;}
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    public void payouts(WithdrawalPayoutService payouts){this.payouts=payouts;}
 
     public FinanceOperationsService(FinanceOperationsSqlRepository repository, ObjectMapper json, @Value("${clients.identity.base-url}") String identityUrl, @Value("${clients.booking.base-url}") String bookingUrl, PayoutBankDirectory payoutBanks, com.domesticservice.finance.config.PayoutProperties payoutConfig) {
         this.repository = repository;
@@ -86,16 +95,26 @@ public class FinanceOperationsService {
     @Transactional
     public Map<String, Object> saveBank(String token, Map<String, Object> b) {
         long staff = ServiceHttpClient.userId(identity.authenticate(token, "STAFF"));
-        String bank = text(b, "bankCode", 30, true), account = text(b, "accountNumber", 50, true), holder = text(b, "accountHolder", 160, true);
+        String bank = text(b, "bankCode", 30, true), account = text(b, "accountNumber", 50, true), holder = text(b, "accountHolder", 160, false);
         if (!payoutBanks.supports(bank)) throw bad("Vui lòng chọn ngân hàng trong danh sách hỗ trợ đã cấu hình.");
         if (!account.matches("[0-9]{5,30}"))
             throw bad("Số tài khoản phải có 5–30 chữ số.");
+        if(payouts!=null && payouts.automaticEnabled() && (bankLookup==null || !bankLookup.ready()))
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Dịch vụ tra tên tự động chưa sẵn sàng. Chưa thể liên kết tài khoản nhận tiền.");
+        var proof=bankLookup!=null && bankLookup.ready()?bankLookup.resolve(staff,bank,account):null;
+        if(proof!=null){
+            if(!holder.isBlank() && !PayosPayoutClient.normalizeName(holder).equals(PayosPayoutClient.normalizeName(proof.get("account_holder"))))throw bad("Tên người nhận đã thay đổi hoặc không khớp. Vui lòng tra cứu lại.");
+            holder=proof.get("account_holder").toString();
+        }else if(holder.isBlank())throw bad("Vui lòng nhập tên chủ tài khoản để đối chiếu.");
         balance(staff, true);
         var existing = repository.saveBankFindStaffBankAccounts(Long.class, staff, bank, account);
-        if (!existing.isEmpty())
+        if (!existing.isEmpty()) {
+            if(proof!=null){bankLookup.verify(existing.getFirst(),staff,proof);return Map.of("id",existing.getFirst(),"status","VERIFIED");}
             return Map.of("id", existing.getFirst(), "status", repository.saveBankFindStaffBankAccounts2(String.class, existing.getFirst()));
+        }
         boolean first = !Boolean.TRUE.equals(repository.saveBankExistsStaffBankAccounts(Boolean.class, staff));
         long id = repository.saveBankInsertStaffBankAccounts(staff, bank, account, holder, first);
+        if(proof!=null){bankLookup.verify(id,staff,proof);return Map.of("id",id,"status","VERIFIED");}
         return Map.of("id", id, "status", "PENDING");
     }
 
@@ -114,7 +133,14 @@ public class FinanceOperationsService {
         }
         var banks = repository.withdrawFindStaffBankAccounts(bankId, staff);
         if (banks.isEmpty())
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Tài khoản ngân hàng chưa được Admin xác minh hoặc không thuộc bạn.");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Tài khoản ngân hàng chưa được xác minh hoặc không thuộc bạn.");
+        boolean automatic=payouts!=null && payouts.automaticEnabled();
+        if(automatic){
+            if(!payouts.automaticReady())throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Kênh rút tự động chưa sẵn sàng.");
+            var bank=banks.getFirst();
+            if(bank.get("verified_at")==null || Objects.toString(bank.get("verification_note"),"").isBlank() || !payoutBanks.supports(Objects.toString(bank.get("bank_code"),"")))
+                throw new ResponseStatusException(HttpStatus.CONFLICT,"Tài khoản nhận cần được xác minh lại trước khi rút tự động.");
+        }
         long available = ((Number) wallet.get("available_balance")).longValue(), minimum = ((Number) wallet.getOrDefault("minimum_balance", 0L)).longValue();
         if (available - amount < minimum)
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Số dư khả dụng không đủ hoặc thấp hơn mức tối thiểu.");
@@ -123,8 +149,9 @@ public class FinanceOperationsService {
         ledger(balanceId, "DEBIT", "AVAILABLE", "HOLD", amount, id, "withdraw:" + id + ":available");
         ledger(balanceId, "CREDIT", "RESERVED", "HOLD", amount, id, "withdraw:" + id + ":reserved");
         repository.withdrawUpdateStaffBalances(amount, amount, balanceId);
-        event(staff, "WITHDRAWAL_REQUESTED", id, "Yêu cầu rút tiền đã được lưu, chờ xét duyệt; chưa chuyển tiền ngân hàng.");
-        return Map.of("id", id, "status", "PENDING");
+        if(automatic)payouts.queueAutomatic(id);
+        event(staff, "WITHDRAWAL_REQUESTED", id, automatic?"Đã lưu yêu cầu rút tự động và giữ tiền; hệ thống sẽ gửi lệnh qua payOS khi nguồn chi đủ số dư.":"Yêu cầu rút tiền đã được lưu, chờ xét duyệt; chưa chuyển tiền ngân hàng.");
+        return Map.of("id", id, "status", automatic?"APPROVED":"PENDING");
     }
 
     private void event(long staff, String type, long reference, String message) {
@@ -177,8 +204,9 @@ public class FinanceOperationsService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Không tìm thấy yêu cầu rút của bạn.");
         var withdrawal=rows.getFirst();long amount=((Number)withdrawal.get("amount")).longValue();
         if("CANCELLED".equals(withdrawal.get("status")))return Map.of("id",id,"status","CANCELLED","amount",amount);
-        if(!"PENDING".equals(withdrawal.get("status")) || repository.withdrawalHasPayout(id))
-            throw new ResponseStatusException(HttpStatus.CONFLICT,"Chỉ được hủy khi đang chờ Admin duyệt. Yêu cầu đã được xử lý; vui lòng tải lại trạng thái.");
+        boolean cancellable="PENDING".equals(withdrawal.get("status")) || ("APPROVED".equals(withdrawal.get("status")) && Boolean.TRUE.equals(withdrawal.get("automatic_requested")));
+        if(!cancellable || repository.withdrawalHasPayout(id))
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"Yêu cầu đã được xử lý hoặc đã gửi lệnh chi; vui lòng tải lại trạng thái.");
         long balanceId=((Number)wallet.get("id")).longValue();
         if(repository.releaseCancelledWithdrawal(balanceId,staff,amount)!=1)
             throw new ResponseStatusException(HttpStatus.CONFLICT,"Khoản giữ chưa khớp. Yêu cầu chưa được hủy; cần kiểm tra số dư.");
@@ -251,7 +279,7 @@ public class FinanceOperationsService {
         result.put("amount", row.get("amount"));
         result.put("status", List.of("PAID", "PROCESSED").contains(row.get("status")) ? "SUCCESS" : List.of("FAILED", "REJECTED", "CANCELLED").contains(row.get("status")) ? "FAILED" : "PENDING");
         result.put("rawStatus", row.get("status"));
-        result.put("paymentMethod", Objects.equals(row.get("payment_method"), "CASH") ? "CASH" : "BANK_TRANSFER");
+        result.put("paymentMethod", Objects.equals(row.get("payment_method"), "WALLET") ? "WALLET" : Objects.equals(row.get("payment_method"), "CASH") ? "CASH" : "BANK_TRANSFER");
         result.put("platformFee", 0);
         result.put("createdAt", row.get("created_at"));
         result.put("description", Objects.toString(row.get("admin_note"), ""));
@@ -280,11 +308,7 @@ public class FinanceOperationsService {
     }
 
     public Map<String, Object> paymentProvider(String token, long id) {
-        var user = identity.authenticate(token, "CUSTOMER");
-        var b = booking.get("/api/v1/booking/bookings/" + id, token);
-        if (((Number) b.get("customerId")).longValue() != ServiceHttpClient.userId(user))
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy đơn của bạn.");
-        throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Chưa cấu hình nhà cung cấp PayOS/VietQR để tạo QR và xác minh giao dịch thật.");
+        return customerWallet.pay(token,id);
     }
 
     public Map<String, Object> policy(String token) {
@@ -338,6 +362,12 @@ public class FinanceOperationsService {
     public Map<String, Object> settle(String token, long id) {
         identity.authenticate(token, "ADMIN");
         var book = booking.get("/api/v1/booking/bookings/" + id, token);
+        return settleBook(id, book);
+    }
+
+    @SuppressWarnings("unchecked")
+    @Transactional
+    public Map<String,Object> settleBook(long id, Map<String,Object> book) {
         if (!"COMPLETED".equals(book.get("status")))
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Chỉ lập quyết toán và hóa đơn sau khi đơn hoàn thành.");
         repository.settleLockRecords(id);
@@ -348,9 +378,6 @@ public class FinanceOperationsService {
         long paid = repository.settleFindPayments(Long.class, id);
         if (paid < total)
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Chưa xác minh đủ số tiền thanh toán trong Finance.");
-        var settings = repository.settleFindFinanceSettings(java.math.BigDecimal.class);
-        if (settings.isEmpty())
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Admin cần lưu chính sách phí hệ thống trước khi quyết toán.");
         var people = ((List<Map<String, Object>>) book.get("assignments")).stream().filter(a -> "COMPLETED".equals(a.get("status"))).map(a -> ((Number) a.get("staffId")).longValue()).distinct().sorted().toList();
         if (people.size() != ((Number) book.get("requiredStaffCount")).intValue())
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Chưa đủ nhân viên hoàn thành để quyết toán.");
@@ -364,12 +391,13 @@ public class FinanceOperationsService {
         repository.settleInsertInvoiceItems(invoice, serviceName, base + addons, base + addons);
         double hours = java.time.Duration.between(java.time.Instant.parse((String) book.get("startsAt")), java.time.Instant.parse((String) book.get("endsAt"))).toMinutes() / 60.0;
         for (int index = 0; index < people.size(); index++) {
-            long staff = people.get(index), share = total / people.size() + (index < total % people.size() ? 1 : 0);
-            long fee = java.math.BigDecimal.valueOf(share).multiply(settings.getFirst()).divide(java.math.BigDecimal.valueOf(100), 0, java.math.RoundingMode.DOWN).longValueExact();
+            long staff = people.get(index), share = "CASH".equals(book.get("paymentMethod")) ? repository.cashJobShare(id, staff) : total / people.size() + (index < total % people.size() ? 1 : 0);
+            long net = java.math.BigDecimal.valueOf(share).multiply(java.math.BigDecimal.valueOf(80)).divide(java.math.BigDecimal.valueOf(100), 0, java.math.RoundingMode.DOWN).longValueExact();
+            long fee = share - net;
             var wallet = balance(staff, true);
             long balanceId = ((Number) wallet.get("id")).longValue();
             long income = repository.settleInsertStaffIncomes(staff, id, balanceId, hours, share, fee, share - fee);
-            ledger(balanceId, "CREDIT", "AVAILABLE", "EARNING", share - fee, income, "booking:" + id + ":staff:" + staff + ":earning");
+            if (net > 0) ledger(balanceId, "CREDIT", "AVAILABLE", "EARNING", share - fee, income, "booking:" + id + ":staff:" + staff + ":earning");
             repository.settleUpdateStaffBalances(share - fee, share - fee, balanceId);
         }
         repository.settleUpdatePayments(order, id);
