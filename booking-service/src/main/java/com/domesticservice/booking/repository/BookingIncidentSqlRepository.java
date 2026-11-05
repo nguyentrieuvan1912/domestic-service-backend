@@ -18,7 +18,7 @@ public class BookingIncidentSqlRepository {
     }
 
     public List<Map<String, Object>> listFindBookingIncidents(Object... args) {
-        return db.queryForList("SELECT i.id,i.booking_id AS \"bookingId\",b.booking_code AS \"bookingCode\",i.reporter_role AS \"reporterRole\",i.reason,i.status,i.created_at AS \"createdAt\" FROM booking_incidents i JOIN bookings b ON b.id=i.booking_id ORDER BY i.id DESC LIMIT 500", args);
+        return db.queryForList("SELECT i.id,i.booking_id AS \"bookingId\",b.booking_code AS \"bookingCode\",i.reporter_role AS \"reporterRole\",i.reason,i.status,i.reported_staff_id AS \"staffId\",i.reporter_id AS \"reporterId\",i.created_at AS \"createdAt\" FROM booking_incidents i JOIN bookings b ON b.id=i.booking_id ORDER BY i.id DESC LIMIT 500", args);
     }
 
     public int saveUpdateBookingIncidents(Object... args) {

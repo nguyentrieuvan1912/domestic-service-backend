@@ -19,6 +19,7 @@ class PromotionQueryTest {
         db.execute("CREATE TABLE promotion_services(promotion_id BIGINT,service_id BIGINT)");
         db.update("INSERT INTO promotions VALUES(1,'GIAM10','All services','',DATEADD('DAY',-1,CURRENT_TIMESTAMP),DATEADD('DAY',1,CURRENT_TIMESTAMP),'PERCENTAGE',10,NULL,0,NULL,0,'ACTIVE'),(2,'VESINH10','Hourly cleaning','',DATEADD('DAY',-1,CURRENT_TIMESTAMP),DATEADD('DAY',1,CURRENT_TIMESTAMP),'PERCENTAGE',10,NULL,0,NULL,0,'ACTIVE')");
         db.update("INSERT INTO promotion_services VALUES(2,2)");
+        db.execute("ALTER TABLE promotions ADD COLUMN owner_customer_id BIGINT");
         var result=new PromotionQueryService(new com.domesticservice.catalog.repository.PromotionQuerySqlRepository(queries)).promotions();
         assertEquals(2,result.size());
         assertEquals(List.of(),result.getFirst().get("serviceIds"));

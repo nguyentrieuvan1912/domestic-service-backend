@@ -17,8 +17,6 @@ services:
       AI_DB_PASSWORD: ${AI_DB_PASSWORD:-local_ai_change_me}
       NOTIFICATION_DB_USER: ${NOTIFICATION_DB_USER:-notification_app}
       NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD:-local_notification_change_me}
-      AI_PROVIDER_URL: ${AI_PROVIDER_URL:-}
-      AI_PROVIDER_KEY: ${AI_PROVIDER_KEY:-}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
@@ -186,6 +184,8 @@ services:
       args:
         SERVICE: ai-assistant-service
     environment:
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev-seed}
       SERVER_PORT: 8080
       DB_HOST: postgres

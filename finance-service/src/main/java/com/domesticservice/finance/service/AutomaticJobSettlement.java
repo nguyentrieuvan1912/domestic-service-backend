@@ -12,6 +12,7 @@ import org.springframework.web.server.ResponseStatusException;
 public class AutomaticJobSettlement {
  private final NativeQueryExecutor db;
  private final FinanceOperationsService ops;
+ @org.springframework.beans.factory.annotation.Autowired(required=false) private StaffDisciplineService discipline;
  public AutomaticJobSettlement(NativeQueryExecutor db, FinanceOperationsService ops){this.db=db;this.ops=ops;}
  static long n(Map<String,Object> r,String k){return ((Number)r.get(k)).longValue();}
  static ResponseStatusException conflict(String m){return new ResponseStatusException(HttpStatus.CONFLICT,m);}
@@ -66,6 +67,7 @@ public class AutomaticJobSettlement {
   }
   var result=ops.settleBook(id,book);
   if(cash)db.update("UPDATE cash_job_debits SET status='SETTLED',updated_at=now() WHERE booking_id=? AND status='DEBITED'",id);
+  if(discipline!=null)discipline.completed(book);
   return result;
  }
 }

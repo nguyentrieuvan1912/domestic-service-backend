@@ -23,7 +23,7 @@ public class PromotionQuerySqlRepository {
 
     public List<Map<String, Object>> promotionsFindPromotions(Map<Long, List<Long>> scopes, Object... args) {
         return db.query("""
-            SELECT * FROM promotions WHERE status='ACTIVE' AND end_at>CURRENT_TIMESTAMP
+            SELECT * FROM promotions WHERE owner_customer_id IS NULL AND status='ACTIVE' AND end_at>CURRENT_TIMESTAMP
               AND (usage_limit IS NULL OR used_count<usage_limit) ORDER BY start_at,id
             """, (rs, row) -> {
             var item = new LinkedHashMap<String, Object>();

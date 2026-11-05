@@ -9,3 +9,7 @@ spring:
   jpa:
     hibernate:
       ddl-auto: none
+ai:
+  knowledge:
+    indexer:
+      enabled: false

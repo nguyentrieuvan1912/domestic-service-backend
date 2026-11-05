@@ -21,6 +21,7 @@ public class BookingWorkflowService {
 
     private final ObjectMapper json;
     private BookingFinanceBridge finance;
+    @org.springframework.beans.factory.annotation.Autowired(required=false) private ForgottenJobService discipline;
     @org.springframework.beans.factory.annotation.Autowired(required=false)
     public void finance(BookingFinanceBridge finance){this.finance=finance;}
 
@@ -366,8 +367,10 @@ public class BookingWorkflowService {
             if (finance != null) finance.reserve(id, staff);
             repository.confirmCashCollection(((Number)a.get("id")).longValue());
         }
+        if(next.equals("EN_ROUTE") && discipline!=null)discipline.checkDeparture(b);
         String assignmentState = next.equals("COMPLETED") ? "COMPLETED" : next.equals("CANCELLED") ? "CANCELLED" : "ACCEPTED";
         repository.progressUpdateBookingAssignments(next, assignmentState, a.get("id"));
+        if(discipline!=null)discipline.record(id,((Number)a.get("id")).longValue(),staff,next,"STAFF", next.equals("EN_ROUTE")?"Bắt đầu di chuyển tới nhà khách":next.equals("IN_PROGRESS")?"Đã đến nơi gặp gia chủ và bắt đầu dịch vụ":next.equals("COMPLETED")?"Đã hoàn thành, gửi đủ ảnh nghiệm thu":"Nhân viên hủy ca");
         if (next.equals("IN_PROGRESS")) {
             repository.progressUpdateBookings(id);
             transition(b, "IN_PROGRESS", staff, "STAFF", "Nhân viên bắt đầu thực hiện dịch vụ.");
@@ -458,12 +461,17 @@ public class BookingWorkflowService {
         return Map.of("id", id, "status", status);
     }
 
+    public List<Map<String,Object>> forgottenRemediations(String token){ops.actor(token,"ADMIN");return repository.forgottenRemediations();}
+    public List<Map<String,Object>> incidents(String token,long id){var user=ops.actor(token,"CUSTOMER","STAFF","ADMIN");detail(token,id);return repository.ownedIncidents(id,ServiceHttpClient.userId(user),"ADMIN".equals(user.get("role")));}
+
     @Transactional
     public Map<String, Object> incident(String token, long id, Map<String, Object> body) {
         var user = ops.actor(token, "STAFF", "CUSTOMER", "ADMIN");
         var b = row(id, false);
         owned(user, b);
-        long issue = repository.incidentInsertBookingIncidents(id, user.get("id"), user.get("role"), text(body, "reason", 2000, true));
+        long issue;
+        if("CUSTOMER".equals(user.get("role"))) issue=repository.customerComplaint(id,ServiceHttpClient.userId(user),text(body,"reason",2000,true),text(body,"requestKey",160,true),body.get("staffId"));
+        else issue = repository.incidentInsertBookingIncidents(id, user.get("id"), user.get("role"), text(body, "reason", 2000, true));
         return Map.of("id", issue, "status", "OPEN");
     }
 

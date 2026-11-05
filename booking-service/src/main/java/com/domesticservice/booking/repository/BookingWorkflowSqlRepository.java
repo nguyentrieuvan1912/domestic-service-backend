@@ -54,7 +54,12 @@ public class BookingWorkflowSqlRepository {
     }
 
     public List<Map<String, Object>> historyFindBookingStatusHistories(Object... args) {
-        return db.queryForList("SELECT id,new_status AS status,reason AS description,changed_at AS timestamp,changed_by_type AS \"changedBy\" FROM booking_status_histories WHERE booking_id=? ORDER BY changed_at,id", args);
+        return db.queryForList("""
+          SELECT * FROM (
+            SELECT 'booking-'||id AS id,new_status AS status,reason AS description,changed_at AS timestamp,changed_by_type AS "changedBy",changed_by AS "staffId",NULL::bigint AS "assignmentId",NULL::text AS "staffName" FROM booking_status_histories WHERE booking_id=?
+            UNION ALL SELECT 'execution-'||e.id,e.status,e.note,e.occurred_at,e.source,e.staff_id,e.assignment_id,a.staff_snapshot->>'fullName' FROM staff_execution_events e JOIN booking_assignments a ON a.id=e.assignment_id WHERE e.booking_id=?
+          ) events ORDER BY timestamp,id
+          """,args[0],args[0]);
     }
 
     public <T> T eligibilityExistsStaffServiceCapabilities(Class<T> type, Object... args) {
@@ -276,4 +281,13 @@ public class BookingWorkflowSqlRepository {
     public List<Map<String, Object>> publicReviewStatsCountReviews(Object... args) {
         return db.queryForList("SELECT service_id AS \"serviceId\",count(*) AS \"reviewCount\",avg(rating) AS rating FROM reviews WHERE moderation_status IN ('PUBLISHED','RESOLVED') GROUP BY service_id", args);
     }
+    public long customerComplaint(long booking,long user,String reason,String key,Object staffValue){
+        db.queryForMap("SELECT id FROM bookings WHERE id=? FOR UPDATE",booking);
+        Long staff=null;if(staffValue!=null){try{staff=Long.parseLong(staffValue.toString());}catch(NumberFormatException ex){throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Nhân viên không hợp lệ.");}
+          if(db.queryForList("SELECT id FROM booking_assignments WHERE booking_id=? AND staff_id=?",booking,staff).isEmpty())throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.BAD_REQUEST,"Nhân viên không thuộc đơn.");}
+        var old=db.queryForList("SELECT * FROM booking_incidents WHERE reporter_id=? AND client_key=?",user,key);if(!old.isEmpty()){var r=old.getFirst();if(((Number)r.get("booking_id")).longValue()!=booking||!reason.equals(r.get("reason"))||!java.util.Objects.equals(staff,r.get("reported_staff_id")))throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.CONFLICT,"Yêu cầu đã tồn tại với nội dung khác.");return ((Number)r.get("id")).longValue();}
+        return db.insert("INSERT INTO booking_incidents(booking_id,reporter_id,reporter_role,reason,client_key,reported_staff_id) VALUES (?,?,'CUSTOMER',?,?,?)",booking,user,reason,key,staff);
+    }
+    public List<Map<String,Object>> ownedIncidents(long id,long user,boolean admin){return admin?db.queryForList("SELECT * FROM booking_incidents WHERE booking_id=? ORDER BY id DESC",id):db.queryForList("SELECT * FROM booking_incidents WHERE booking_id=? AND reporter_id=? ORDER BY id DESC",id,user);}
+    public List<Map<String,Object>> forgottenRemediations(){return db.queryForList("SELECT r.*,b.booking_code FROM forgotten_job_remediations r JOIN bookings b ON b.id=r.booking_id ORDER BY r.id DESC");}
 }

@@ -1,5 +1,9 @@
 server:
   port: ${SERVER_PORT:8085}
+ai:
+  knowledge:
+    indexer:
+      enabled: ${AI_KNOWLEDGE_INDEXER_ENABLED:true}
 spring:
   application:
     name: ai-assistant-service

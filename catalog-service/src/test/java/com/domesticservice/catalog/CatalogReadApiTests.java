@@ -45,7 +45,7 @@ class CatalogReadApiTests {
     @Test void promotionsFilterAvailabilityAndExposeApplicableServices() throws Exception {
         var response=get("/promotions");
         assertThat(response.statusCode()).isEqualTo(200);
-        assertThat(response.body()).contains("CURRENT","UPCOMING").doesNotContain("EXPIRED","EXHAUSTED","HIDDEN");
+        assertThat(response.body()).contains("CURRENT","UPCOMING").doesNotContain("EXPIRED","EXHAUSTED","HIDDEN","PERSONAL");
         var data=json.readTree(response.body());
         assertThat(data.size()).isEqualTo(2);
         assertThat(data.get(0).get("isActive").asBoolean()).isTrue();

@@ -138,7 +138,7 @@ QR/webhook, xác minh chuyển tiền và refund qua nhà cung cấp chưa tri�
 
 ## AI và voice
 
-AI có GET/POST `/conversations`, GET/POST `/conversations/{id}/messages`, DELETE `/conversations/{id}`. Scope CUSTOMER sở hữu, clientKey chống lặp; đóng hội thoại lưu ENDED. Khi chưa có AI_PROVIDER_URL và AI_PROVIDER_KEY, gửi tin trả 503 và không ghi phản hồi giả. Adapter riêng nhận `{messages,instructions}`, trả `{content}`; không phải URL API trực tiếp của một vendor bất kỳ. Chưa hoàn thiện intent/slot/RAG/tool calling/BookingDraft. Chưa tích hợp LiveKit/voice vào development build.
+AI có GET/POST `/conversations`, GET/POST `/conversations/{id}/messages`, DELETE `/conversations/{id}`. Scope CUSTOMER sở hữu, clientKey chống lặp và đóng hội thoại lưu ENDED. Trợ lý chạy qua Ollama và gọi công cụ tra cứu backend. Xem [API hội thoại AI Assistant](ai-assistant.md) để thiết lập. Chưa tích hợp BookingDraft, LiveKit và voice vào development build.
 
 ## Setup và giới hạn
 

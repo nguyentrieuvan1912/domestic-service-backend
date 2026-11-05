@@ -107,6 +107,10 @@ public class BookingOperationsController {
         return flow.cancel(token, id, body);
     }
 
+    @GetMapping("/admin/forgotten-jobs") public List<Map<String,Object>> forgotten(@RequestHeader(value="Authorization",required=false)String token){return flow.forgottenRemediations(token);}
+    @GetMapping("/bookings/{id}/incidents")
+    public List<Map<String,Object>> incidents(@RequestHeader(value="Authorization",required=false)String token,@PathVariable long id){return flow.incidents(token,id);}
+
     @PostMapping("/bookings/{id}/incidents")
     public Map<String, Object> incident(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id, @RequestBody Map<String, Object> body) {
         return flow.incident(token, id, body);

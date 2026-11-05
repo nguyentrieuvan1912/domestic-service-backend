@@ -2,13 +2,15 @@ package com.domesticservice.ai.service;
 
 import com.domesticservice.common.web.ServiceHttpClient;
 import java.util.*;
-import java.time.Duration;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
-import org.springframework.web.client.RestClient;
 import org.springframework.web.server.ResponseStatusException;
 import com.domesticservice.ai.repository.AiConversationSqlRepository;
 
@@ -19,13 +21,18 @@ public class AiConversationService {
 
     private final ServiceHttpClient identity;
 
-    private final String providerUrl, providerKey;
+    private final AiProvider provider;
+    private final TransactionTemplate transactions;
+    private final AiBookingDraftService drafts;
 
-    public AiConversationService(AiConversationSqlRepository repository, @Value("${clients.identity.base-url}") String identityUrl, @Value("${AI_PROVIDER_URL:}") String providerUrl, @Value("${AI_PROVIDER_KEY:}") String providerKey) {
+    public AiConversationService(AiConversationSqlRepository repository, AiProvider provider,
+                                 PlatformTransactionManager manager, AiBookingDraftService drafts,
+                                 @Value("${clients.identity.base-url}") String identityUrl) {
         this.repository = repository;
+        this.provider = provider;
+        this.drafts = drafts;
+        this.transactions = new TransactionTemplate(manager);
         identity = new ServiceHttpClient(identityUrl);
-        this.providerUrl = providerUrl;
-        this.providerKey = providerKey;
     }
 
     private long actor(String token) {
@@ -52,45 +59,137 @@ public class AiConversationService {
         return repository.messagesFindAiMessages(id);
     }
 
-    @Transactional
+    private record Turn(Long responseId, List<Map<String, Object>> context, AiBookingDraftService.Patch draft) {}
+
     public Map<String, Object> send(String token, long id, Map<String, Object> body) {
         long user = actor(token);
-        owned(user, id, true);
-        String text = Objects.toString(body.get("content"), "").strip(), key = Objects.toString(body.get("clientKey"), "");
-        if (text.isEmpty() || text.length() > 4000 || key.isEmpty() || key.length() > 160)
+        String text = Objects.toString(body.get("content"), "").strip();
+        String key = Objects.toString(body.get("clientKey"), "");
+        if (text.isEmpty() || text.length() > 4000 || key.isBlank() || key.length() > 160) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nội dung hoặc mã yêu cầu không hợp lệ.");
-        var prior = repository.sendFindAiMessages(id, key);
-        if (!prior.isEmpty()) {
-            if (!text.equals(prior.getFirst().get("content")))
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã yêu cầu đã dùng với nội dung khác.");
-            return Map.of("id", prior.getFirst().get("id"));
         }
-        if (providerUrl.isBlank() || providerKey.isBlank())
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Trợ lý AI chưa được cấu hình nhà cung cấp. Vui lòng đặt dịch vụ bằng các bước trên giao diện.");
-        if (!Boolean.TRUE.equals(repository.sendExistsAiConversations(Boolean.class, id)))
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Hội thoại đã kết thúc.");
-        var context = repository.sendFindAiMessages2(id);
-        Collections.reverse(context);
-        context.add(Map.of("role", "USER", "content", text));
-        var factory = new JdkClientHttpRequestFactory(java.net.http.HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build());
-        factory.setReadTimeout(Duration.ofSeconds(30));
-        String content;
+        String attempt = UUID.randomUUID().toString();
+        Turn turn = transactions.execute(status -> prepare(user, id, key, text, attempt));
+        if (turn.responseId() != null) return sentTurn(id, key, turn.responseId());
+
         try {
-            var result = RestClient.builder().requestFactory(factory).build().post().uri(providerUrl).header("Authorization", "Bearer " + providerKey).body(Map.of("messages", context, "instructions", "Tư vấn dịch vụ bằng tiếng Việt. Không tuyên bố đã tạo đơn, thanh toán hay cấp năng lực; khách hàng xác nhận trên luồng đặt dịch vụ. Không suy đoán giá, lịch trống, khuyến mãi hoặc thông tin nhân viên.")).retrieve().body(Map.class);
-            content = result == null ? "" : Objects.toString(result.get("content"), "").strip();
-            if (content.isEmpty() || content.length() > 20000)
-                throw new IllegalStateException("Invalid provider response");
-        } catch (RuntimeException ex) {
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Chưa nhận được phản hồi hợp lệ từ nhà cung cấp AI. Vui lòng thử lại.");
+            var reply = provider.reply(turn.context(), token);
+            var draftReply = prepareDraftReply(token, user, id, turn.draft(), reply);
+            return transactions.execute(status -> {
+                owned(user, id, true);
+                requireActive(id);
+                if (!repository.ownsTurn(id, key, attempt)) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "Lượt gửi đã hết hạn. Vui lòng thử lại.");
+                }
+                long userMessage = repository.sendFindAiMessages3(Long.class, id, text, key);
+                var savedDraft = draftReply.prepared() == null ? null : drafts.save(id, user, draftReply.prepared());
+                long replyId = repository.sendFindAiMessages4(Long.class, id, draftReply.text());
+                if (draftReply.receipt() != null) {
+                    var receipt = draftReply.receipt();
+                    repository.saveToolReceipt(userMessage, receipt.name(), receipt.status(),
+                        receipt.httpStatus(), receipt.elapsedMillis());
+                }
+                for (var receipt : reply.tools()) {
+                    repository.saveToolReceipt(userMessage, receipt.name(), receipt.status(),
+                        receipt.httpStatus(), receipt.elapsedMillis());
+                }
+                repository.completeTurn(id, key, attempt, replyId);
+                var result = sentTurn(id, key, replyId);
+                if (savedDraft != null) result.put("bookingDraft", savedDraft);
+                return result;
+            });
+        } catch (RuntimeException failure) {
+            try {
+                transactions.executeWithoutResult(status -> repository.releaseTurn(id, key, attempt));
+            } catch (RuntimeException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
         }
-        repository.sendFindAiMessages3(Long.class, id, text, key);
-        long reply = repository.sendFindAiMessages4(Long.class, id, content);
-        return Map.of("id", reply);
+    }
+
+    private record DraftReply(String text, AiBookingDraftService.Prepared prepared, AiProvider.ToolReceipt receipt) {}
+
+    private DraftReply prepareDraftReply(String token, long user, long id, AiBookingDraftService.Patch snapshot,
+                                         AiProvider.Reply reply) {
+        if (reply.draftChanges().isEmpty()) return new DraftReply(reply.text(), null, null);
+        long started = System.nanoTime();
+        var patch = new AiBookingDraftService.Patch(snapshot.draftId(), snapshot.version(), reply.draftChanges());
+        try {
+            var prepared = drafts.prepare(token, id, user, patch, true);
+            return new DraftReply(drafts.progress(prepared), prepared, draftReceipt("SUCCEEDED", 200, started));
+        } catch (ResponseStatusException failure) {
+            int code = failure.getStatusCode().value();
+            if (code != 400 && code != 404) throw failure;
+            return new DraftReply("Mình chưa lưu thay đổi. " + failure.getReason()
+                + " Bạn kiểm tra và gửi lại thông tin cụ thể nhé.", null, draftReceipt("FAILED", code, started));
+        }
+    }
+
+    private static AiProvider.ToolReceipt draftReceipt(String status, int code, long started) {
+        return new AiProvider.ToolReceipt("propose_booking_draft", status, code,
+            java.time.Duration.ofNanos(System.nanoTime() - started).toMillis());
+    }
+
+    private Map<String, Object> sentTurn(long conversation, String key, long reply) {
+        var result = new LinkedHashMap<String, Object>();
+        result.put("id", reply);
+        result.put("messages", repository.turnMessages(conversation, key, reply));
+        return result;
+    }
+
+    private Turn prepare(long user, long id, String key, String text, String attempt) {
+        owned(user, id, true);
+        requireActive(id);
+        String hash = digest(text);
+        var previous = repository.findTurn(id, key);
+        if (!previous.isEmpty()) {
+            var turn = previous.getFirst();
+            if (!hash.equals(turn.get("request_hash"))) throw reusedKey();
+            if (turn.get("response_id") instanceof Number reply) return new Turn(reply.longValue(), List.of(), null);
+        }
+        var legacy = repository.sendFindAiMessages(id, key);
+        if (!legacy.isEmpty()) {
+            if (!text.equals(legacy.getFirst().get("content"))) throw reusedKey();
+            return new Turn(((Number) legacy.getFirst().get("id")).longValue(), List.of(), null);
+        }
+        if (repository.hasRunningTurn(id)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Đang xử lý một tin nhắn. Vui lòng thử lại.");
+        }
+        repository.startTurn(id, key, hash, attempt);
+        var context = new ArrayList<>(repository.sendFindAiMessages2(id));
+        Collections.reverse(context);
+        var draft = drafts.snapshot(id, user);
+        if (!draft.changes().isEmpty()) {
+            context.addFirst(Map.of("role", "SYSTEM", "content", draft.changes()));
+        }
+        context.add(Map.of("role", "USER", "content", text));
+        return new Turn(null, context, draft);
+    }
+
+    private void requireActive(long id) {
+        if (!Boolean.TRUE.equals(repository.sendExistsAiConversations(Boolean.class, id))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Hội thoại đã kết thúc.");
+        }
+    }
+
+    private static ResponseStatusException reusedKey() {
+        return new ResponseStatusException(HttpStatus.CONFLICT, "Mã yêu cầu đã dùng với nội dung khác.");
+    }
+
+    private static String digest(String text) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                .digest(text.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Transactional
     public void clear(String token, long id) {
-        owned(actor(token), id, true);
-        repository.clearUpdateAiConversations(id);
+        long user = actor(token);
+        owned(user, id, true);
+        repository.clearConversationData(id, user);
     }
 }

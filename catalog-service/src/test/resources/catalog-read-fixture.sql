@@ -36,3 +36,6 @@ INSERT INTO add_ons VALUES(1,1,'Lau bếp',NULL,20000,15,NULL,'ACTIVE'),
  (2,1,'Hidden addon',NULL,10000,5,NULL,'INACTIVE');
 INSERT INTO service_requirements VALUES(1,1,'areaM2','Diện tích','NUMBER',true,'[]','{"min":1,"max":200}',1,'ACTIVE'),
  (2,1,'hidden','Hidden','TEXT',false,'[]','{}',0,'INACTIVE');
+
+ALTER TABLE promotions ADD COLUMN owner_customer_id BIGINT;
+INSERT INTO promotions SELECT 99,'PERSONAL',promotion_name,description,start_at,end_at,discount_type,discount_value,max_discount_amount,minimum_booking_amount,usage_limit,used_count,status,101 FROM promotions WHERE id=1;

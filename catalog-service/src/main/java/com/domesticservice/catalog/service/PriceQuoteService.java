@@ -102,6 +102,7 @@ public class PriceQuoteService {
             if (rows.isEmpty())
                 throw bad("Mã ưu đãi không khả dụng.");
             var p = rows.getFirst();
+            if(p.get("owner_customer_id") instanceof Number owner && owner.longValue()!=customer)throw bad("Ưu đãi này không thuộc tài khoản của bạn.");
             promotionId = ((Number) p.get("id")).longValue();
             long total = base + extras;
             if (total < ((Number) p.get("minimum_booking_amount")).longValue())
