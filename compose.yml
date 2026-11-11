@@ -186,6 +186,7 @@ services:
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
+      AI_TRANSCRIPTION_URL: ${AI_TRANSCRIPTION_URL:-http://whisper-voice:8080}
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev-seed}
       SERVER_PORT: 8080
       DB_HOST: postgres
@@ -201,6 +202,49 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
+  whisper-voice:
+    profiles: ["backend"]
+    image: ghcr.io/ggml-org/whisper.cpp:main@sha256:7d7d696423072264bbab7a495de23c3e3d73590b80c9508c939219d93a04b299
+    environment:
+      WHISPER_VOICE_MODEL: ${WHISPER_VOICE_MODEL:-large-v3-turbo-q5_0}
+    entrypoint: ["sh", "-ec"]
+    command:
+      - |
+        case "$$WHISPER_VOICE_MODEL" in large-v3-turbo-q5_0|small-q5_1) ;; *) echo 'Unsupported Whisper voice model' >&2; exit 1;; esac
+        model="ggml-$$WHISPER_VOICE_MODEL.bin"
+        if [ ! -s "/models/$$model" ]; then
+          stage=$$(mktemp -d /models/download.XXXXXX)
+          trap 'rm -f "$$stage/$$model"; rmdir "$$stage"' EXIT
+          /app/models/download-ggml-model.sh "$$WHISPER_VOICE_MODEL" "$$stage"
+          mv "$$stage/$$model" "/models/$$model"
+          rmdir "$$stage"
+          trap - EXIT
+        fi
+        vad="/models/ggml-silero-v6.2.0.bin"
+        if [ ! -s "$$vad" ]; then
+          stage=$$(mktemp -d /models/vad.XXXXXX)
+          trap 'rm -f "$$stage/ggml-silero-v6.2.0.bin"; rmdir "$$stage"' EXIT
+          /app/models/download-vad-model.sh silero-v6.2.0 "$$stage"
+          mv "$$stage/ggml-silero-v6.2.0.bin" "$$vad"
+          rmdir "$$stage"
+          trap - EXIT
+        fi
+        tr -d '\r' < /app/voice-ffmpeg.sh > /usr/local/bin/ffmpeg
+        chmod 755 /usr/local/bin/ffmpeg
+        set -- --no-gpu
+        if [ "$${WHISPER_VOICE_DEVICE:-cpu}" = cuda ]; then set --; fi
+        exec /app/build/bin/whisper-server --model "/models/$$model" --host 0.0.0.0 --port 8080 --convert --tmp-dir /voice-tmp --language vi --duration 30000 --threads 8 --vad --vad-model "$$vad" --vad-min-silence-duration-ms 350 --vad-speech-pad-ms 120 --no-fallback --suppress-nst "$$@"
+    volumes:
+      - whisper-model:/models
+      - ./docker/whisper-ffmpeg.sh:/app/voice-ffmpeg.sh:ro
+    tmpfs:
+      - /voice-tmp:size=16m,mode=0700
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 4s
+      start_period: 2m
     restart: unless-stopped
   notification-service:
     profiles: ["backend"]
@@ -241,3 +285,4 @@ services:
     restart: unless-stopped
 volumes:
   postgres-data:
+  whisper-model:

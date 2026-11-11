@@ -5,7 +5,7 @@ import java.util.Map;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/v1/ai-assistant/conversations/{id}/booking-draft")
+@RequestMapping("/api/v1/ai-assistant/conversations/{id}")
 public class AiBookingDraftController {
     private final AiBookingDraftService service;
 
@@ -13,13 +13,19 @@ public class AiBookingDraftController {
         this.service = service;
     }
 
-    @GetMapping
+    @GetMapping("/booking-draft")
     public Map<String, Object> get(@RequestHeader(value = "Authorization", required = false) String token,
-                                   @PathVariable long id) {
-        return service.get(token, id);
+                                   @PathVariable long id, @RequestParam(required = false) Long draftId) {
+        return service.get(token, id, draftId);
     }
 
-    @PatchMapping
+    @GetMapping("/booking-drafts")
+    public Map<String, Object> list(@RequestHeader(value = "Authorization", required = false) String token,
+                                    @PathVariable long id) {
+        return service.list(token, id);
+    }
+
+    @PatchMapping("/booking-draft")
     public Map<String, Object> patch(@RequestHeader(value = "Authorization", required = false) String token,
                                      @PathVariable long id, @RequestBody AiBookingDraftService.Patch body) {
         return service.patch(token, id, body);

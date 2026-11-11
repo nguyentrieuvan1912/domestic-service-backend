@@ -13,7 +13,7 @@ Số dòng trên chỉ tính seed, không gồm account/ứng viên được t�
 | catalog_db | 8 | 152 |
 | booking_db | 17 | 17 |
 | finance_db | 17 | 21 |
-| ai_db | 9 | 7 |
+| ai_db | 10 | 7 |
 | notification_db | 4 | 0 |
 
 Notification là schema chuẩn bị trước, không seed và chưa thay thế `identity_db.notifications`.
@@ -125,6 +125,8 @@ Số dòng trên là baseline khi chưa thêm dữ liệu nghiệp vụ; không 
 | idempotency_records | 0 |
 
 AI V5 bổ sung `ai_chat_turns` (0 dòng demo). AI V7 bổ sung `knowledge_document_revisions` (0 dòng demo), cùng version, phê duyệt và trạng thái lập chỉ mục cho tài liệu. Các bài hướng dẫn chính thức từ V6 và lịch sử tương ứng là dữ liệu tham chiếu, tách khỏi số dòng demo trong bảng trên.
+
+AI V8 bổ sung `catalog_semantic_vectors` (0 dòng demo) để lưu vector dịch vụ/gói theo hash nội dung và model. Nguồn dữ liệu được lấy qua Catalog API.
 
 Refresh token, idempotency và outbox không được tạo giả: chỉ có dữ liệu khi triển khai luồng thật.
 ID hiện là BIGINT tự tăng. Demo: Admin/User 1, Customer/User 2, Staff/User 3;

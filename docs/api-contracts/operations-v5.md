@@ -112,6 +112,12 @@ Mode A chỉ chọn một Staff và phải chờ Staff chấp nhận; gói nhi�
 
 Chat chỉ cho thành viên; đơn kết thúc đóng gửi tin. Không có phản hồi chat/nhận việc bằng timer. Tạo booking dùng bước xác nhận quote giữa hai service: booking commit với pricingConfirmed=false, consume quote, rồi mới bật matching. Bản ghi chưa xác nhận không được Staff nhận; outbox pending được giữ để xử lý nếu service gián đoạn.
 
+Điều phối Staff chạy ở Booking Service khi xử lý sự kiện Mode B chuyển sang tìm nhân viên. Mỗi lượt xét tối đa 20 ca mở theo thứ tự giờ bắt đầu trong 7 ngày. `staff_dispatch_runs` lưu thời điểm chụp dữ liệu, trọng số, các thành phần điểm, ứng viên, trạng thái bộ tối ưu và kết quả đối chiếu. Điểm tổng mỗi ứng viên dùng số nguyên từ 0 đến 10000, thành phần từ 0 đến 100.
+
+Trọng số thử nghiệm v1 gồm năng lực 35%, đánh giá đã công khai 25%, tin cậy 25% và lịch còn trống 15%. Tin cậy dùng ca hoàn thành và ca bỏ lỡ có bằng chứng trong 90 ngày. Tải công việc dùng giờ đã nhận trong 7 ngày, chuẩn hóa theo 40 giờ. Dữ liệu thiếu được bỏ khỏi phép tính của ứng viên rồi chuẩn hóa lại trọng số. Danh bạ Staff hiện chưa có tọa độ nên không tính khoảng cách.
+
+Mode A giữ người đã được mời, Mode B xét ứng viên qua cùng bộ lọc nhận ca. CP-SAT ưu tiên số ca đủ người, sau đó mới tối ưu tổng điểm và kiểm tra khoảng đệm 1 giờ. Nếu đội đề xuất vẫn đủ vị trí và còn đáp ứng điều kiện nhận thông báo, Booking báo đội đó trước và gửi tiếp cho các Staff đủ điều kiện sau ít nhất một phút nếu ca vẫn mở. Khi phương án thiếu người hoặc đã lỗi thời, Booking báo nhóm đủ điều kiện ngay. Khi Staff nhận ca, Booking Service kiểm tra lại lịch và số vị trí trong transaction ghi phân công và giữ chỗ.
+
 ## Finance
 
 | Method / path | Quyền | Chức năng |

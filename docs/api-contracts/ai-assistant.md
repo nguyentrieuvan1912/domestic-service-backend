@@ -37,15 +37,41 @@ Model embedding mặc định là `qwen3-embedding:0.6b`, tải vào cùng Ollam
 
 Worker chạy nền, chia đoạn 1.400 ký tự với chồng lấn 160 ký tự, gửi tối đa 8 đoạn mỗi lần tạo embedding. Trạng thái gồm PENDING, INDEXING, READY và FAILED. Gọi Ollama ngoài giao dịch database. Chỉ ghi kết quả khi version và mã tác vụ còn khớp; chỉnh sửa hoặc ẩn trong lúc chạy sẽ làm kết quả cũ mất hiệu lực. Tác vụ dở do khởi động lại được nhận lại sau lease 5 phút. Thất bại hiển thị ở admin để thử lại. `AI_KNOWLEDGE_INDEXER_ENABLED=false` tắt worker khi cần kiểm thử tách biệt.
 
+## Gợi ý dịch vụ và gói theo ngữ nghĩa
+
+`POST /api/v1/ai-assistant/recommendations` dùng Bearer CUSTOMER, nhận:
+
+```json
+{"query":"Nhà lâu ngày chưa dọn, cần làm sạch kỹ trước Tết","areaM2":70,"maxStaffCount":2,"maxDurationMinutes":240}
+```
+
+`query` bắt buộc, tối đa 2.000 ký tự. Các giới hạn còn lại tùy chọn. Nếu query nêu rõ diện tích theo m² hoặc giới hạn thời lượng/số nhân viên, backend đọc các giá trị đó khi trường tương ứng chưa được gửi. Giới hạn tối đa là 100.000 m², 20 nhân viên, 720 phút.
+
+Phản hồi có `status`, `embeddingModel`, `message`, `areaM2` và tối đa ba `candidates`. Trạng thái gồm RECOMMENDED, CLARIFY, NEEDS_DETAILS, NO_FIT và CATALOG_CHANGED. Mỗi candidate có serviceId, name, serviceType, similarity, score, reason, areaBased, needsArea, packages, sourceHash và embeddingId. Mỗi gói có packageId, name, quantity, staffCount, durationMinutes, similarity, reason, sourceHash và embeddingId.
+
+Vector dùng model embedding local, lưu bất biến theo loại đối tượng/ID/hash nội dung/model trong `catalog_semantic_vectors` (V8). Worker làm ấm chỉ mục sau khởi động và kiểm tra lại mỗi phút. Request cũng bổ sung vector còn thiếu. Trước xếp hạng, dịch vụ/gói được lấy lại qua Catalog và lọc các giới hạn. Dịch vụ có định mức diện tích dùng API recommendation của Catalog. Trước trả kết quả, backend kiểm tra lại nội dung và điều kiện của các gói để tránh trả snapshot cũ trong lúc admin sửa danh mục.
+
+Xếp hạng kết hợp cosine và mức khớp từ khóa tên/nhóm. Các kết quả quá yếu hoặc thấp hơn nhiều so với kết quả đầu được bỏ qua. Các dịch vụ cùng serviceType được gộp để danh sách không chỉ chứa các biến thể gần giống nhau. Nhu cầu chưa rõ được hỏi lại. Khi thiếu diện tích cho dịch vụ có định mức, AI đề nghị bổ sung trước khi đưa nút chọn gói.
+
+Tool `recommend_services` dùng cùng luồng này. Chat lưu các thẻ gợi ý vào `ai_messages.suggestions` với sourceHash, embeddingId và embeddingModel để đối chiếu nguồn. Lịch sử và lượt gửi lại trả nguyên các thẻ đã lưu. Thẻ SERVICE mở chi tiết dịch vụ. Thẻ PACKAGE có thêm serviceId, quantity, requiredStaffCount và answers đã biết. Mobile chọn gói qua PATCH bản nháp có kiểm tra version; sau đó khách dùng thẻ Xác nhận để hoàn tất luồng Booking thường.
+
+Quantity là số gói, bao gồm số gói combo. Gợi ý hiển thị tên gói, thời lượng và số nhân viên. Báo giá, lịch, nhân viên và thanh toán được kiểm tra ở bước đặt dịch vụ. Đề xuất gói theo ngữ nghĩa thuộc luồng tư vấn.
+
 ## Bản nháp đặt lịch
 
-`GET /api/v1/ai-assistant/conversations/{id}/booking-draft` trả về `id`, `version`, `expiresAt`, `data`, `missingSlots` và `choices` (thông tin dịch vụ, địa chỉ, gói, tiện ích, câu hỏi của dịch vụ). Bản nháp chưa có thì `id` và `version` là null. Chỉ chủ hội thoại với phiên CUSTOMER được truy cập.
+`GET /api/v1/ai-assistant/conversations/{id}/booking-draft` đọc bản nháp cập nhật gần nhất. Truyền `?draftId=...` để đọc đúng bản nháp được chọn. API trả về `id`, `version`, `expiresAt`, `data`, `missingSlots` và `choices` (dịch vụ, địa chỉ, gói, tiện ích, câu hỏi). Nếu không có bản nháp và không truyền ID, `id` và `version` là null. ID không thuộc hội thoại hoặc đã hết hạn trả 404. Chỉ chủ hội thoại với phiên CUSTOMER được truy cập.
 
-Khi lượt chat lưu bản nháp, `POST .../messages` trả thêm `bookingDraft` cùng cấu trúc để app hiển thị thẻ ngay. Khi mở lại hội thoại hoặc nhận lượt gửi lại, app đọc bản nháp hiện tại qua GET.
+`GET /api/v1/ai-assistant/conversations/{id}/booking-drafts` trả `{drafts, expandedDraftId}` để hiển thị các thẻ theo từng dịch vụ. Danh sách chỉ chứa bản nháp còn hạn đã có dịch vụ, với thông tin Catalog cho thẻ. Đọc chi tiết theo `draftId` để nạp cả lựa chọn địa chỉ. Khi lượt chat lưu bản nháp, `POST .../messages` trả thêm `bookingDraft` để mở thẻ tương ứng. Lượt chat không cập nhật bản nháp sẽ thu gọn các thẻ, với `expandedDraftId` là null. App đọc lại danh sách khi mở hội thoại hoặc khi phát lại lượt gửi.
 
-Gọi `PATCH` cùng đường dẫn với `{"draftId":null,"version":null,"changes":{"serviceId":12}}` để lưu trường đầu tiên. Lượt sau gửi lại ID và version vừa nhận. Giá trị null bỏ trường, còn `answers` gộp theo từng mã câu hỏi. Đổi dịch vụ xóa gói, tiện ích, mã ưu đãi và câu trả lời của dịch vụ cũ. Giờ bắt đầu dùng ISO local theo Asia/Ho_Chi_Minh, ví dụ `2026-12-15T14:00`. Bản nháp hết hạn sau 24 giờ từ lần sửa cuối. Nếu nhận 409, tải lại bản nháp trước khi sửa.
+Gọi `PATCH .../booking-draft` với `{"draftId":null,"version":null,"changes":{"serviceId":12}}` để lưu trường đầu tiên. Lượt sau gửi ID và version của bản nháp cập nhật gần nhất. Khi `changes.serviceId` chỉ sang dịch vụ khác, backend tạo bản nháp riêng hoặc cập nhật bản nháp còn hạn của dịch vụ đó. Dữ liệu các dịch vụ khác được giữ riêng. Giá trị null bỏ trường, còn `answers` gộp theo từng mã câu hỏi. Giờ bắt đầu dùng ISO local theo Asia/Ho_Chi_Minh, ví dụ `2026-12-15T14:00`. Bản nháp hết hạn sau 24 giờ từ lần sửa cuối. Nếu nhận 409, tải lại bản nháp trước khi sửa.
 
-Khi khách yêu cầu đặt hoặc sửa bản nháp trong chat, Ollama có thể đề xuất các trường đã rõ. Backend đối chiếu với Catalog và Identity, chọn chế độ B (chờ nhân viên nhận) và lưu cùng tin nhắn trả lời. Vệ sinh một máy dùng gói giá thấp nhất dành cho một nhân viên; vệ sinh nhiều máy có thể chọn số nhân viên. Mobile mở đơn nháp theo ID hội thoại và điền lại các giá trị hợp lệ trong màn hình đặt dịch vụ, nơi khách chọn lịch, địa chỉ và hoàn tất báo giá, thanh toán và đặt đơn. Cùng mã yêu cầu sẽ nhận lại lượt đã lưu. Nếu bản nháp đổi trong lúc Ollama xử lý, API trả 409 để tránh ghi đè.
+Khi khách yêu cầu đặt hoặc sửa bản nháp trong chat, Ollama có thể đề xuất các trường đã rõ. Backend đối chiếu với Catalog và Identity, chọn chế độ B (chờ nhân viên nhận) và lưu cùng tin nhắn trả lời. Vệ sinh một máy dùng gói giá thấp nhất dành cho một nhân viên; vệ sinh nhiều máy có thể chọn số nhân viên. Mobile mở đơn theo ID hội thoại và ID bản nháp trên thẻ, rồi điền các giá trị hợp lệ trong màn hình đặt dịch vụ để khách chọn lịch, địa chỉ và hoàn tất báo giá, thanh toán và đặt đơn. Cùng mã yêu cầu sẽ nhận lại lượt đã lưu. Nếu bản nháp đổi trong lúc Ollama xử lý, API trả 409 để tránh ghi đè.
+
+## Giọng nói trong chat
+
+`POST /api/v1/ai-assistant/voice/transcriptions` nhận `multipart/form-data` với trường `audio` và Bearer CUSTOMER. Định dạng nhận là M4A/MP4, WAV, WebM hoặc Ogg, tối đa 2 MiB mỗi bản thu. Ứng dụng dừng thu sau tối đa 30 giây, Whisper xử lý tối đa 30 giây đầu và trả `{ "text": "..." }` tiếng Việt. 422 dành cho tệp rỗng, định dạng không hỗ trợ hoặc bản thu không đọc được. 429 báo bộ chép lời đang bận và 503 báo dịch vụ chưa sẵn sàng.
+
+Docker Compose chạy `whisper-voice` trong mạng nội bộ và tải model đa ngôn ngữ vào volume `whisper-model` ở lần chạy đầu. `WHISPER_VOICE_MODEL` mặc định là `large-v3-turbo-q5_0`, có thể dùng `small-q5_1`. `AI_TRANSCRIPTION_URL` là địa chỉ nội bộ cấu hình ở AI Service. Bản thu dùng tạm trong bộ nhớ cho quá trình chép lời, không lưu vào `ai_db`. Mobile xóa tệp tạm sau xử lý hoặc hủy. Kết quả chỉ điền vào ô nhập và đi theo luồng chat hiện có khi khách bấm gửi. Nút **Nghe** dùng giọng tiếng Việt của thiết bị và có thể dừng. Khách có thể tiếp tục nhập chữ nếu không cấp quyền micro hoặc thiết bị thiếu giọng đọc.
 
 ## Chạy Ollama trên Windows
 

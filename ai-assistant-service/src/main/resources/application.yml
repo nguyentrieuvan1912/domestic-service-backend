@@ -5,6 +5,11 @@ ai:
     indexer:
       enabled: ${AI_KNOWLEDGE_INDEXER_ENABLED:true}
 spring:
+  servlet:
+    multipart:
+      max-file-size: 2MB
+      max-request-size: 3MB
+      file-size-threshold: 2MB
   application:
     name: ai-assistant-service
   config:

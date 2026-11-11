@@ -112,6 +112,11 @@ public class BookingWorkflowService {
         return repository.listFindBookings(user).stream().map(this::bookingView).toList();
     }
 
+    public Map<String, Object> customerStatistics(String token) {
+        long customerId = ServiceHttpClient.userId(ops.actor(token, "CUSTOMER"));
+        return Map.of("completedBookings", repository.completedCustomerBookings(customerId));
+    }
+
     public List<Map<String, Object>> history(String token, long id) {
         detail(token, id);
         return repository.historyFindBookingStatusHistories(id);
@@ -123,7 +128,6 @@ public class BookingWorkflowService {
         List<String> reasons = new ArrayList<>();
         if ("MODE_A".equals(b.get("booking_mode")) && (!"WAITING".equals(b.get("staff_wait_state")) || b.get("staff_response_deadline") == null || !((Timestamp) b.get("staff_response_deadline")).toInstant().isAfter(Instant.now())))
             reasons.add("INVITATION_EXPIRED");
-        long service = ((Number) b.get("service_id")).longValue();
         Instant start = ((Timestamp) b.get("starts_at")).toInstant(), end = ((Timestamp) b.get("ends_at")).toInstant();
         var location = ops.object(b.get("address_snapshot"));
         String district = BookingOperationsService.location(location), city = city(Objects.toString(location.getOrDefault("city", location.get("province")), ""));
@@ -137,16 +141,7 @@ public class BookingWorkflowService {
         }
         if (start.isBefore(Instant.now()))
             reasons.add("PAST_START");
-        Set<Long> requiredServices = new LinkedHashSet<>();
-        requiredServices.add(service);
-        var snapshot = ops.object(b.get("service_snapshot"));
-        if (snapshot.get("relatedServices") instanceof List<?> related) {
-            for (var item : related) {
-                if (item instanceof Map<?, ?> map && map.get("id") instanceof Number id)
-                    requiredServices.add(id.longValue());
-            }
-        }
-        for (long requiredService : requiredServices) {
+        for (long requiredService : requiredServices(b)) {
             if (!Boolean.TRUE.equals(repository.eligibilityExistsStaffServiceCapabilities(Boolean.class, staff, requiredService, Timestamp.from(start), Timestamp.from(end))) && !reasons.contains("CAPABILITY_MISSING"))
                 reasons.add("CAPABILITY_MISSING");
             if (Boolean.TRUE.equals(repository.eligibilityExistsStaffRestrictions(Boolean.class, staff, requiredService, Timestamp.from(end), Timestamp.from(start))) && !reasons.contains("RESTRICTION"))
@@ -164,6 +159,17 @@ public class BookingWorkflowService {
         if ("MODE_A".equals(b.get("booking_mode")) && !Boolean.TRUE.equals(repository.eligibilityExistsBookingAssignments(Boolean.class, b.get("id"), staff)))
             reasons.add("NOT_INVITED");
         return reasons;
+    }
+
+    Set<Long> requiredServices(Map<String, Object> booking) {
+        Set<Long> required = new LinkedHashSet<>();
+        required.add(((Number) booking.get("service_id")).longValue());
+        if (ops.object(booking.get("service_snapshot")).get("relatedServices") instanceof List<?> related) {
+            for (var item : related) {
+                if (item instanceof Map<?, ?> map && map.get("id") instanceof Number id) required.add(id.longValue());
+            }
+        }
+        return required;
     }
 
     private static final Map<String, String> REASONS = Map.ofEntries(Map.entry("INVITATION_EXPIRED", "Hết thời gian nhận đơn. Vui lòng chú ý lời mời để có doanh thu tốt hơn."), Map.entry("SCHEDULE_REQUIRED", "Bạn cần đăng ký đầy đủ lịch làm việc trong tuần trước khi được xét nhận đơn."), Map.entry("INACTIVE", "Tài khoản hoặc trạng thái làm việc không phù hợp."), Map.entry("OFFLINE", "Bạn đang ngoại tuyến."), Map.entry("PAST_START", "Ca đã qua giờ bắt đầu."), Map.entry("CAPABILITY_MISSING", "Chưa có năng lực được Admin xác nhận."), Map.entry("RESTRICTION", "Bạn đang bị hạn chế nhận dịch vụ này."), Map.entry("AREA_OUTSIDE", "Ca nằm ngoài khu vực hoạt động."), Map.entry("OUTSIDE_AVAILABILITY", "Ca nằm ngoài lịch rảnh đã lưu."), Map.entry("BOOKING_CONFLICT", "Trùng ca hoặc không đủ khoảng đệm 1 giờ."), Map.entry("POSITION_FULL", "Đã đủ nhân viên nhận ca."), Map.entry("NOT_INVITED", "Bạn không được mời vào ca Mode A."));

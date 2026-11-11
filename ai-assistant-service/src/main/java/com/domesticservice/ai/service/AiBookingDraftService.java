@@ -42,12 +42,47 @@ public class AiBookingDraftService {
     }
 
     public Map<String, Object> get(String token, long conversation) {
+        return get(token, conversation, null);
+    }
+
+    public Map<String, Object> get(String token, long conversation, Long draftId) {
         long customer = actor(token);
         requireOwner(conversation, customer, false);
-        var draft = current(conversation, customer);
+        var open = openDrafts(conversation, customer);
+        var draft = draftId == null ? open.stream().findFirst().orElse(null) : open.stream()
+            .filter(candidate -> draftId.equals(candidate.getId())).findFirst()
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Đơn nháp không tồn tại hoặc đã hết hạn."));
         var data = data(draft);
         var choices = choices(data, token);
         return response(draft, data, missing(data, choices), choices);
+    }
+
+    private record Panel(Long expandedDraftId, List<BookingDraft> drafts) {}
+
+    public Map<String, Object> list(String token, long conversation) {
+        long customer = actor(token);
+        var panel = transactions.execute(status -> {
+            requireOwner(conversation, customer, true);
+            return new Panel(conversations.expandedDraftId(conversation), openDrafts(conversation, customer));
+        });
+        var cards = new ArrayList<Map<String, Object>>();
+        for (var draft : panel.drafts()) {
+            var data = data(draft);
+            if (!data.containsKey("serviceId")) continue;
+            Choices choices;
+            try {
+                choices = catalogChoices(data, List.of());
+            } catch (ResponseStatusException failure) {
+                if (failure.getStatusCode().value() != 404) throw failure;
+                choices = new Choices(Map.of(), List.of(), List.of(), List.of(), List.of());
+            }
+            cards.add(response(draft, data, json.readValue(draft.getMissingSlots(), new TypeReference<>() {}), choices));
+        }
+        var result = new LinkedHashMap<String, Object>();
+        result.put("drafts", cards);
+        result.put("expandedDraftId", cards.stream().anyMatch(card -> Objects.equals(card.get("id"), panel.expandedDraftId()))
+            ? panel.expandedDraftId() : null);
+        return result;
     }
 
     public Map<String, Object> patch(String token, long conversation, Patch patch) {
@@ -62,18 +97,27 @@ public class AiBookingDraftService {
         return new Patch(draft == null ? null : draft.getId(), draft == null ? null : draft.getVersion(), data(draft));
     }
 
-    record Prepared(Patch patch, Map<String, Object> data, List<String> missing, Choices choices) {}
+    record Prepared(Patch patch, Long targetId, Long targetVersion, Map<String, Object> data,
+                    List<String> missing, Choices choices) {}
 
     Prepared prepare(String token, long conversation, long customer, Patch patch, boolean fromChat) {
         if (patch.changes() == null || patch.changes().isEmpty() || !FIELDS.containsAll(patch.changes().keySet())) {
             throw bad("Trường chỉnh sửa bản nháp không hợp lệ.");
         }
-        var before = current(conversation, customer);
+        var open = openDrafts(conversation, customer);
+        var before = open.stream().findFirst().orElse(null);
         requireVersion(before, patch);
-        var data = data(before);
-        if (patch.changes().containsKey("serviceId")
-            && !Objects.equals(Objects.toString(data.get("serviceId"), null),
-                Objects.toString(patch.changes().get("serviceId"), null))) {
+        var beforeData = data(before);
+        var target = before;
+        Object requestedService = patch.changes().get("serviceId");
+        if (requestedService != null && !sameService(beforeData.get("serviceId"), requestedService)) {
+            long serviceId = positive(requestedService, "serviceId");
+            target = open.stream().filter(candidate -> sameService(data(candidate).get("serviceId"), serviceId))
+                .findFirst().orElse(beforeData.containsKey("serviceId") ? null : before);
+        }
+        var data = data(target);
+        Object previousQuantity = data.get("quantity");
+        if (patch.changes().containsKey("serviceId") && !sameService(data.get("serviceId"), requestedService)) {
             for (var dependent : List.of("packageId", "addOnIds", "answers", "promotionCode",
                 "quantity", "requiredStaffCount")) data.remove(dependent);
             if (fromChat) {
@@ -101,9 +145,10 @@ public class AiBookingDraftService {
         }
         normalize(data);
         var choices = choices(data, token);
-        if (fromChat) applyChatDefaults(data, choices, patch, data(before).get("quantity"));
+        if (fromChat) applyChatDefaults(data, choices, patch, previousQuantity);
         validateChoices(data, choices);
-        return new Prepared(patch, data, missing(data, choices), choices);
+        return new Prepared(patch, target == null ? null : target.getId(), target == null ? null : target.getVersion(),
+            data, missing(data, choices), choices);
     }
 
     Map<String, Object> save(long conversation, long customer, Prepared prepared) {
@@ -111,8 +156,11 @@ public class AiBookingDraftService {
         if (!Boolean.TRUE.equals(conversations.sendExistsAiConversations(Boolean.class, conversation))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Hội thoại đã kết thúc.");
         }
-        var draft = current(conversation, customer);
-        requireVersion(draft, prepared.patch());
+        var open = openDrafts(conversation, customer);
+        requireVersion(open.stream().findFirst().orElse(null), prepared.patch());
+        var draft = prepared.targetId() == null ? null : open.stream()
+            .filter(candidate -> prepared.targetId().equals(candidate.getId())).findFirst().orElse(null);
+        requireVersion(draft, prepared.targetId(), prepared.targetVersion());
         Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
         if (draft == null) {
             draft = new BookingDraft();
@@ -125,18 +173,21 @@ public class AiBookingDraftService {
         draft.setExpiresAt(now.plus(Duration.ofHours(24)));
         draft.setDraftData(json.writeValueAsString(prepared.data()));
         draft.setMissingSlots(json.writeValueAsString(prepared.missing()));
-        return response(drafts.saveAndFlush(draft), prepared.data(), prepared.missing(), prepared.choices());
+        var saved = drafts.saveAndFlush(draft);
+        conversations.setExpandedDraft(conversation, prepared.data().containsKey("serviceId") ? saved.getId() : null);
+        return response(saved, prepared.data(), prepared.missing(), prepared.choices());
     }
 
     String progress(Prepared prepared) {
         if (prepared.missing().contains("serviceId")) return "Bạn muốn đặt dịch vụ nào?";
         String serviceName = Objects.toString(prepared.choices().service().get("name"), "dịch vụ đã chọn");
-        if (airConditionerCleaning(prepared.choices())) {
-            if (prepared.missing().contains("quantity")) return "Bạn cần vệ sinh bao nhiêu máy lạnh?";
-            if (prepared.missing().contains("requiredStaffCount")) {
-                return "Bạn muốn 1 nhân viên làm lần lượt hay cần nhiều nhân viên để làm song song cho nhanh hơn? "
-                    + "Nếu muốn làm song song, bạn cho mình biết cần mấy người. Bạn cũng có thể chọn ở bước đặt dịch vụ.";
-            }
+        if (!airConditionerCleaning(prepared.choices())) {
+            return "Mình đã lưu đơn nháp **" + serviceName + "**. Bấm Xác nhận trên thẻ để bổ sung thông tin và chọn lịch.";
+        }
+        if (prepared.missing().contains("quantity")) return "Bạn cần vệ sinh bao nhiêu máy lạnh?";
+        if (prepared.missing().contains("requiredStaffCount")) {
+            return "Bạn muốn 1 nhân viên làm lần lượt hay cần nhiều nhân viên để làm song song cho nhanh hơn? "
+                + "Nếu muốn làm song song, bạn cho mình biết cần mấy người. Bạn cũng có thể chọn ở bước đặt dịch vụ.";
         }
         var answers = prepared.data().get("answers") instanceof Map<?, ?> values ? values : Map.of();
         var suggestions = prepared.choices().requirements().stream()
@@ -174,7 +225,8 @@ public class AiBookingDraftService {
     private static void applyChatDefaults(Map<String, Object> data, Choices choices, Patch patch, Object previousQuantity) {
         if (choices.packages().size() == 1) data.putIfAbsent("packageId", choices.packages().getFirst().get("id"));
         if (!airConditionerCleaning(choices)) {
-            if (choices.service().get("priceUnit") instanceof String priceUnit && !"ITEM".equals(priceUnit)) {
+            boolean groceryTrip = "GROCERY_SHOPPING".equals(choices.service().get("serviceType")) && data.containsKey("packageId");
+            if (groceryTrip || (choices.service().get("priceUnit") instanceof String priceUnit && !"ITEM".equals(priceUnit))) {
                 data.putIfAbsent("quantity", 1L);
             }
             if (data.get("packageId") != null && data.get("requiredStaffCount") == null) {
@@ -212,13 +264,25 @@ public class AiBookingDraftService {
     }
 
     private BookingDraft current(long conversation, long customer) {
-        return drafts.findFirstByConversationIdAndCustomerIdAndStatusAndExpiresAtAfterOrderByIdDesc(
-            conversation, customer, "COLLECTING", Instant.now()).orElse(null);
+        return openDrafts(conversation, customer).stream().findFirst().orElse(null);
+    }
+
+    private List<BookingDraft> openDrafts(long conversation, long customer) {
+        return drafts.findByConversationIdAndCustomerIdAndStatusAndExpiresAtAfterOrderByUpdatedAtDescIdDesc(
+            conversation, customer, "COLLECTING", Instant.now());
+    }
+
+    private static boolean sameService(Object first, Object second) {
+        return Objects.equals(Objects.toString(first, null), Objects.toString(second, null));
     }
 
     private static void requireVersion(BookingDraft draft, Patch patch) {
-        if (!Objects.equals(draft == null ? null : draft.getId(), patch.draftId())
-            || !Objects.equals(draft == null ? null : draft.getVersion(), patch.version())) {
+        requireVersion(draft, patch.draftId(), patch.version());
+    }
+
+    private static void requireVersion(BookingDraft draft, Long id, Long version) {
+        if (!Objects.equals(draft == null ? null : draft.getId(), id)
+            || !Objects.equals(draft == null ? null : draft.getVersion(), version)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Bản nháp đã thay đổi. Hãy tải lại trước khi sửa.");
         }
     }
@@ -231,7 +295,10 @@ public class AiBookingDraftService {
                            List<Map<String, Object>> addOns, List<Map<String, Object>> requirements) {}
 
     private Choices choices(Map<String, Object> data, String token) {
-        var addresses = identity.list("/api/v1/identity/customer/addresses", token);
+        return catalogChoices(data, identity.list("/api/v1/identity/customer/addresses", token));
+    }
+
+    private Choices catalogChoices(Map<String, Object> data, List<Map<String, Object>> addresses) {
         if (data.get("serviceId") == null) return new Choices(Map.of(), addresses, List.of(), List.of(), List.of());
         var detail = catalog.get("/api/v1/catalog/services/" + data.get("serviceId"), null);
         return new Choices(service(detail), addresses, items(detail, "packages"), items(detail, "addOns"), items(detail, "requirements"));

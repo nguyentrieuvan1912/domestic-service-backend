@@ -3,14 +3,18 @@ package com.domesticservice.ai.repository;
 import java.util.*;
 import com.domesticservice.ai.repository.support.NativeQueryExecutor;
 import org.springframework.stereotype.Repository;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.core.type.TypeReference;
 
 @Repository
 public class AiConversationSqlRepository {
 
     private final NativeQueryExecutor db;
+    private final ObjectMapper json;
 
-    public AiConversationSqlRepository(NativeQueryExecutor db) {
+    public AiConversationSqlRepository(NativeQueryExecutor db, ObjectMapper json) {
         this.db = db;
+        this.json = json;
     }
 
     private long insert(String sql, Object... values) {
@@ -19,6 +23,14 @@ public class AiConversationSqlRepository {
 
     public List<Map<String, Object>> ownedFindAiConversationsForUpdate(boolean lock, Object... args) {
         return db.queryForList("SELECT id FROM ai_conversations WHERE id=? AND customer_id=?" + (lock ? " FOR UPDATE" : ""), args);
+    }
+
+    public Long expandedDraftId(long conversation) {
+        return db.queryForObject("SELECT expanded_draft_id FROM ai_conversations WHERE id=?", Long.class, conversation);
+    }
+
+    public void setExpandedDraft(long conversation, Long draftId) {
+        db.update("UPDATE ai_conversations SET expanded_draft_id=? WHERE id=?", draftId, conversation);
     }
 
     public List<Map<String, Object>> conversationsFindAiConversations(Object... args) {
@@ -30,14 +42,26 @@ public class AiConversationSqlRepository {
     }
 
     public List<Map<String, Object>> messagesFindAiMessages(Object... args) {
-        return db.queryForList("SELECT id,conversation_id AS \"conversationId\",sender_type AS role,content,created_at AS \"createdAt\" FROM ai_messages WHERE conversation_id=? ORDER BY id", args);
+        return decodeSuggestions(db.queryForList("SELECT id,conversation_id AS \"conversationId\",sender_type AS role,content,suggestions::text AS suggestions,created_at AS \"createdAt\" FROM ai_messages WHERE conversation_id=? ORDER BY id", args));
     }
 
     public List<Map<String, Object>> turnMessages(long conversation, String key, long reply) {
-        return db.queryForList("""
-            SELECT id,conversation_id AS "conversationId",sender_type AS role,content,created_at AS "createdAt"
+        return decodeSuggestions(db.queryForList("""
+            SELECT id,conversation_id AS "conversationId",sender_type AS role,content,suggestions::text AS suggestions,created_at AS "createdAt"
             FROM ai_messages WHERE conversation_id=? AND (client_key=? OR id=?) ORDER BY id
-            """, conversation, key, reply);
+            """, conversation, key, reply));
+    }
+
+    private List<Map<String, Object>> decodeSuggestions(List<Map<String, Object>> messages) {
+        for (var message : messages) {
+            message.put("suggestions", json.readValue(message.get("suggestions").toString(),
+                new TypeReference<List<Map<String, Object>>>() {}));
+        }
+        return messages;
+    }
+
+    public void saveSuggestions(long message, List<Map<String, Object>> suggestions) {
+        db.update("UPDATE ai_messages SET suggestions=CAST(? AS jsonb) WHERE id=?", json.writeValueAsString(suggestions), message);
     }
 
     public List<Map<String, Object>> sendFindAiMessages(Object... args) {

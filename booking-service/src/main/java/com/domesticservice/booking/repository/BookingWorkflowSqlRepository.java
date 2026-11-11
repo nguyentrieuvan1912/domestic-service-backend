@@ -53,6 +53,10 @@ public class BookingWorkflowSqlRepository {
         return db.queryForList(sql + " ORDER BY created_at DESC LIMIT 500", args);
     }
 
+    public long completedCustomerBookings(long customerId) {
+        return db.queryForObject("SELECT count(*) FROM bookings WHERE customer_id=? AND status='COMPLETED'", Long.class, customerId);
+    }
+
     public List<Map<String, Object>> historyFindBookingStatusHistories(Object... args) {
         return db.queryForList("""
           SELECT * FROM (

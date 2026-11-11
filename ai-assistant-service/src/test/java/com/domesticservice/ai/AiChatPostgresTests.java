@@ -55,6 +55,45 @@ class AiChatPostgresTests {
     }
 
     @Test
+    void customerChatHidesInternalGuidanceInNewAndPreviouslyStoredReplies() {
+        String token = "Bearer owner";
+        long id = conversation();
+        String guidance = "Mở chi tiết đơn để gửi yêu cầu hỗ trợ.";
+        String internal = " Bạn có thể kiểm tra bằng cách gọi công cụ [get_current_promotions].\n\n"
+            + "Hướng dẫn tham khảo: Chính sách hỗ trợ (bản 3)";
+        var request = request("INTERNAL_GUIDANCE_TEST");
+        var reply = service.send(token, id, request);
+        assertEquals(guidance, service.messages(token, id).getLast().get("content"));
+
+        long replyId = ((Number) reply.get("id")).longValue();
+        assertEquals(guidance, jdbc.queryForObject("SELECT content FROM ai_messages WHERE id=?", String.class, replyId));
+        jdbc.update("UPDATE ai_messages SET content=? WHERE id=?", guidance + internal, replyId);
+        assertEquals(guidance, service.messages(token, id).getLast().get("content"));
+        assertEquals(reply, service.send(token, id, request));
+
+        jdbc.update("UPDATE ai_messages SET content=? WHERE conversation_id=? AND sender_type='USER'", internal, id);
+        assertEquals(internal, service.messages(token, id).getFirst().get("content"));
+    }
+
+    @Test
+    void promotionQuestionReadsCatalogAndShowsOnlyUsableOffers() {
+        String token = "Bearer owner";
+        long id = conversation();
+        var result = service.send(token, id, request("Khuyến mãi & mã giảm giá hôm nay có gì?"));
+        String answer = service.messages(token, id).getLast().get("content").toString();
+        assertTrue(answer.contains("**NOW10** · Giảm 10% · Vệ sinh nhà theo giờ"), answer);
+        assertTrue(answer.contains("**OWN5**"), answer);
+        assertFalse(answer.contains("FUTURE15"), answer);
+        assertFalse(answer.contains("EXPIRED5"), answer);
+        assertFalse(answer.contains("USED5"), answer);
+        assertFalse(result.containsKey("bookingDraft"));
+        assertEquals(1, jdbc.queryForObject("""
+            SELECT count(*) FROM ai_tool_calls t JOIN ai_messages m ON m.id=t.message_id
+            WHERE m.conversation_id=? AND t.tool_name='get_current_promotions' AND t.status='SUCCEEDED'
+            """, Integer.class, id));
+    }
+
+    @Test
     void retryReturnsSameSavedReplyAndChecksOwnership() {
         long id = conversation();
         var request = request("Tôi muốn dọn nhà.");
@@ -72,7 +111,7 @@ class AiChatPostgresTests {
     }
 
     @Test
-    void bookingAnotherCatalogServiceReplacesThePreviousServiceDetails() {
+    void bookingAnotherCatalogServiceKeepsSeparateDraftsAndConsultationCollapsesThem() {
         String token = "Bearer owner";
         long id = conversation();
         service.send(token, id, request("AC_SINGLE_TEST"));
@@ -84,6 +123,7 @@ class AiChatPostgresTests {
         var reply = service.send(token, id, request("Tôi muốn đặt vệ sinh nhà cửa"));
         var card = (Map<?, ?>) reply.get("bookingDraft");
         assertNotNull(card);
+        assertNotEquals(previous.get("id"), card.get("id"));
         var data = (Map<?, ?>) card.get("data");
         assertEquals(2L, ((Number) data.get("serviceId")).longValue());
         assertEquals(22L, ((Number) data.get("packageId")).longValue());
@@ -92,11 +132,34 @@ class AiChatPostgresTests {
         assertTrue(((java.util.List<?>) card.get("missingSlots")).contains("answers.floors"));
         assertTrue(service.messages(token, id).getLast().get("content").toString().contains("Vệ sinh nhà theo giờ"));
 
+        var panel = drafts.list(token, id);
+        assertEquals(card.get("id"), panel.get("expandedDraftId"));
+        assertEquals(2, ((java.util.List<?>) panel.get("drafts")).size());
+        long previousId = ((Number) previous.get("id")).longValue();
+        var original = drafts.get(token, id, previousId);
+        var originalData = (Map<?, ?>) original.get("data");
+        assertEquals(812, originalData.get("addressId"));
+        assertEquals("AC_ONLY", originalData.get("promotionCode"));
+        assertEquals(404, assertThrows(ResponseStatusException.class,
+            () -> drafts.get("Bearer other", id, previousId)).getStatusCode().value());
+
+        var consultation = request("Chính sách bảo hiểm là gì?");
+        service.send(token, id, consultation);
+        var collapsed = drafts.list(token, id);
+        assertNull(collapsed.get("expandedDraftId"));
+        assertEquals(panel.get("drafts"), collapsed.get("drafts"));
+
         var switched = service.send(token, id, request("Chuyển sang vệ sinh máy lạnh"));
-        var ac = (Map<?, ?>) ((Map<?, ?>) switched.get("bookingDraft")).get("data");
+        var resumed = (Map<?, ?>) switched.get("bookingDraft");
+        var ac = (Map<?, ?>) resumed.get("data");
+        assertEquals(previousId, resumed.get("id"));
         assertEquals(5L, ((Number) ac.get("serviceId")).longValue());
-        assertFalse(ac.containsKey("packageId"));
-        assertFalse(ac.containsKey("requiredStaffCount"));
+        assertEquals(12L, ((Number) ac.get("packageId")).longValue());
+        assertEquals(1L, ((Number) ac.get("requiredStaffCount")).longValue());
+        assertEquals("AC_ONLY", ac.get("promotionCode"));
+        assertEquals(previousId, drafts.list(token, id).get("expandedDraftId"));
+        service.send(token, id, consultation);
+        assertEquals(previousId, drafts.list(token, id).get("expandedDraftId"));
     }
 
     @Test
@@ -133,7 +196,7 @@ class AiChatPostgresTests {
     @Test
     void providerFailureLeavesNoMessagesAndAllowsRetry() {
         long id = conversation();
-        var request = request("Tư vấn dịch vụ.");
+        var request = request("Hướng dẫn sử dụng ứng dụng.");
         FAIL_NEXT.set(true);
         assertEquals(503, assertThrows(ResponseStatusException.class,
             () -> service.send("Bearer owner", id, request)).getStatusCode().value());
@@ -293,6 +356,19 @@ class AiChatPostgresTests {
                 boolean owner = "Bearer owner".equals(exchange.getRequestHeaders().getFirst("Authorization"));
                 respond(exchange, owner ? 200 : 403, "[{\"id\":812}]");
             });
+            server.createContext("/api/v1/catalog/promotions", exchange -> respond(exchange, 200, """
+                [{"code":"NOW10","discountType":"PERCENTAGE","discountValue":10,"isActive":true,
+                  "endDate":"2099-01-01T00:00:00Z","serviceIds":[2]},
+                 {"code":"FUTURE15","discountType":"PERCENTAGE","discountValue":15,"isActive":false,"serviceIds":[]}]
+                """));
+            server.createContext("/api/v1/catalog/customer/vouchers", exchange -> {
+                boolean owner = "Bearer owner".equals(exchange.getRequestHeaders().getFirst("Authorization"));
+                respond(exchange, owner ? 200 : 403, owner ? """
+                    [{"code":"OWN5","name":"Voucher riêng 5%","expires_at":"2099-01-01T00:00:00Z","used_count":0},
+                     {"code":"EXPIRED5","expires_at":"2020-01-01T00:00:00Z","used_count":0},
+                     {"code":"USED5","expires_at":"2099-01-01T00:00:00Z","used_count":1}]
+                    """ : "{}");
+            });
             server.createContext("/api/v1/catalog/services/1", exchange -> respond(exchange, 200, """
                 {"packages":[{"id":2}],"requirements":[{"fieldKey":"rooms","required":true}]}
                 """));
@@ -368,6 +444,12 @@ class AiChatPostgresTests {
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
+                }
+                if ("INTERNAL_GUIDANCE_TEST".equals(latest)) {
+                    respond(exchange, 200, """
+                        {"done":true,"message":{"role":"assistant","content":"Mở chi tiết đơn để gửi yêu cầu hỗ trợ. Bạn có thể kiểm tra bằng cách gọi công cụ [get_current_promotions].\\n\\nHướng dẫn tham khảo: Chính sách hỗ trợ (bản 3)"}}
+                        """);
+                    return;
                 }
                 respond(exchange, FAIL_NEXT.getAndSet(false) ? 503 : 200, """
                     {"done":true,"message":{"role":"assistant","content":"Tôi có thể tư vấn dịch vụ dọn nhà."}}

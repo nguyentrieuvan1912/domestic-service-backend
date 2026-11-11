@@ -40,6 +40,7 @@ class AiConversationBenchmarkTests {
     @Autowired PlatformTransactionManager transactions;
     @Autowired AiCustomerKnowledge knowledge;
     @Autowired ObjectMapper json;
+    @Autowired CatalogSemanticRecommendations recommendations;
     private HttpServer identity;
     private AiConversationService service;
     private AiBookingDraftService drafts;
@@ -63,14 +64,128 @@ class AiConversationBenchmarkTests {
             exchange.sendResponseHeaders(200, body.length);
             try (var output = exchange.getResponseBody()) { output.write(body); }
         });
+        identity.createContext("/api/v1/booking/bookings", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            boolean authorized = TOKEN.equals(exchange.getRequestHeaders().getFirst("Authorization"));
+            String newest = """
+                {"id":752,"bookingCode":"CM-752","status":"MATCHING","paymentStatus":"PAID",
+                 "service":{"name":"Vệ sinh máy lạnh"}}
+                """;
+            String older = """
+                {"id":751,"bookingCode":"CM-751","status":"COMPLETED","paymentStatus":"PAID",
+                 "service":{"name":"Đi chợ hộ"}}
+                """;
+            String body = switch (path) {
+                case "/api/v1/booking/bookings" -> "[" + newest + "," + older + "]";
+                case "/api/v1/booking/bookings/751" -> older;
+                default -> "";
+            };
+            byte[] bytes = (authorized && !body.isEmpty() ? body : "{}").getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(!authorized ? 403 : body.isEmpty() ? 404 : 200, bytes.length);
+            try (var output = exchange.getResponseBody()) { output.write(bytes); }
+        });
         identity.start();
         String identityUrl = "http://127.0.0.1:" + identity.getAddress().getPort();
         String catalogUrl = "http://127.0.0.1:8082";
-        var tools = new AiBusinessTools(catalogUrl, identityUrl, "http://127.0.0.1:8083", json);
+        var tools = new AiBusinessTools(catalogUrl, identityUrl, identityUrl, json, recommendations);
         var provider = new OllamaChatProvider("http://127.0.0.1:11434",
             System.getenv().getOrDefault("OLLAMA_MODEL", "qwen3:8b"), tools, json, knowledge);
         drafts = new AiBookingDraftService(draftRepository, conversations, transactions, json, identityUrl, catalogUrl);
         service = new AiConversationService(conversations, provider, transactions, drafts, identityUrl);
+    }
+
+    @TestFactory
+    Stream<DynamicTest> naturalOrderQueriesUseBookingApi() {
+        var cases = Map.of(
+            "Lần thuê gần đây nhất của tôi có người nhận việc chưa?", "CM-752",
+            "Cho mình xem tình trạng thanh toán của mã đơn CM-751", "CM-751",
+            "Đơn số 751 của tôi đã hoàn thành chưa?", "CM-751");
+        return cases.entrySet().stream().map(entry -> DynamicTest.dynamicTest(entry.getKey(), () -> {
+            long conversation = ((Number) service.create(TOKEN).get("id")).longValue();
+            var reply = service.send(TOKEN, conversation, Map.of("content", entry.getKey(),
+                "clientKey", UUID.randomUUID().toString()));
+            String text = service.messages(TOKEN, conversation).getLast().get("content").toString();
+            assertTrue(text.contains(entry.getValue()), text);
+            assertTrue(text.contains("Đã thanh toán"), text);
+            assertFalse(text.contains(entry.getValue().equals("CM-752") ? "CM-751" : "CM-752"), text);
+            assertFalse(reply.containsKey("bookingDraft"));
+        }));
+    }
+
+    @TestFactory
+    Stream<DynamicTest> unseenRequestsAndQuestions() {
+        var cases = Map.ofEntries(
+            Map.entry("Tìm bảo mẫu trông bé 2 tuổi bán thời gian", "CHILD_CARE"),
+            Map.entry("Vợ chồng tôi đều đi ca, ai ở với nhóc nhà tôi một buổi được nhỉ", "CHILD_CARE"),
+            Map.entry("Tuần này tôi nằm viện, ghé lựa ít rau quả mang sang nhà dùm với", "GROCERY_SHOPPING"),
+            Map.entry("Mấy bộ đồ mặc đi làm nhăn hết rồi, nhờ ai mang về làm phẳng cho mình", "LAUNDRY"),
+            Map.entry("Bà ở một mình cả ngày, sắp xếp người qua hỗ trợ bà sinh hoạt với", "ELDERLY_CARE"),
+            Map.entry("Nhà đi du lịch vài hôm, qua đổ hạt và thay nước cho cún nhà em với", "PET_CARE"),
+            Map.entry("Co ai ghe lam sach cai ghe phong khach bi tre lam do nuoc cam khong nhi", "CLEANING_UPHOLSTERY"),
+            Map.entry("Mình đang so sánh thôi, thuê người lo cho bé tốn khoảng bao nhiêu?", ""),
+            Map.entry("Nếu lịch đã đặt mà hôm đó mình có việc đột xuất thì xử lý thế nào?", ""),
+            Map.entry("Kiếm người thay màn hình laptop bị nứt giúp tôi", ""));
+        return cases.entrySet().stream().map(entry -> DynamicTest.dynamicTest(entry.getKey(), () -> {
+            long conversation = ((Number) service.create(TOKEN).get("id")).longValue();
+            var reply = service.send(TOKEN, conversation, Map.of("content", entry.getKey(),
+                "clientKey", UUID.randomUUID().toString()));
+            var persisted = json.valueToTree(drafts.get(TOKEN, conversation));
+            if (entry.getValue().isEmpty()) {
+                assertTrue(persisted.path("id").isNull());
+                assertFalse(reply.containsKey("bookingDraft"));
+                return;
+            }
+            assertEquals(entry.getValue(), persisted.path("choices").path("service").path("serviceType").asText(),
+                () -> service.messages(TOKEN, conversation).getLast().get("content").toString());
+            assertTrue(reply.containsKey("bookingDraft"));
+            if (entry.getKey().contains("2 tuổi")) {
+                assertEquals("1–3 tuổi", persisted.path("data").path("answers").path("childAge").asText());
+                long packageId = persisted.path("data").path("packageId").asLong();
+                assertTrue(persisted.path("choices").path("packages").valueStream().anyMatch(pack ->
+                    pack.path("id").asLong() == packageId && pack.path("name").asText().contains("bán thời gian")));
+            }
+        }));
+    }
+
+    @TestFactory
+    Stream<DynamicTest> naturalBookingRequestsUseLiveCatalog() {
+        var requests = Map.ofEntries(
+            Map.entry("Tôi muốn mua thực phẩm và giao tới cho tôi", "Đi chợ hộ & Chọn thực phẩm tươi"),
+            Map.entry("Toi can nguoi trong be", "Bảo mẫu & Chăm sóc trẻ em"),
+            Map.entry("Tôi cần người chăm ông bà", "Chăm sóc người cao tuổi"),
+            Map.entry("Mình muốn tắm cho mèo", "Chăm sóc thú cưng tại nhà"),
+            Map.entry("Nhờ tưới cây ban công", "Chăm sóc cây cảnh ban công & sân vườn"),
+            Map.entry("Giặt quần áo giúp tôi", "Giặt ủi & Là phẳng quần áo"),
+            Map.entry("Tôi muốn thuê người nấu cơm", "Nấu ăn gia đình chuẩn vị"),
+            Map.entry("Nạp gas điều hòa giúp tôi", "Bảo dưỡng & Nạp gas máy lạnh"),
+            Map.entry("Mình muốn rửa điều hòa", "Vệ sinh máy lạnh"),
+            Map.entry("Mình cần làm sạch lồng giặt", "Vệ sinh máy giặt lồng đứng & lồng ngang"),
+            Map.entry("Tôi muốn làm sạch máy sấy", "Vệ sinh máy sấy quần áo"),
+            Map.entry("Tôi cần người khử mùi tủ lạnh", "Vệ sinh & Khử mùi tủ lạnh"),
+            Map.entry("Mình muốn giặt ghế sofa", "Vệ sinh sofa, nệm & rèm"),
+            Map.entry("Tôi cần phun khử trùng", "Phun khử khuẩn & Khử mùi ẩm mốc"),
+            Map.entry("Tôi cần người dọn nhà theo ca", "Dọn dẹp theo ca"),
+            Map.entry("Tôi muốn dọn nhà hàng tuần", "Dọn dẹp định kỳ"),
+            Map.entry("Tôi muốn thuê người giúp việc theo giờ", "Dọn dẹp nhà theo giờ"),
+            Map.entry("Tôi cần vệ sinh nhà cửa", "Vệ sinh nhà theo giờ"),
+            Map.entry("Mình cần dọn nhà sau sửa", "Tổng vệ sinh"),
+            Map.entry("Tôi cần tổng vệ sinh toàn diện căn hộ", "Tổng vệ sinh toàn diện"));
+        return requests.entrySet().stream().map(entry -> DynamicTest.dynamicTest(entry.getKey(), () -> {
+            long conversation = ((Number) service.create(TOKEN).get("id")).longValue();
+            var reply = service.send(TOKEN, conversation, Map.of("content", entry.getKey(),
+                "clientKey", UUID.randomUUID().toString()));
+            var persisted = json.readTree(json.writeValueAsString(drafts.get(TOKEN, conversation)));
+            assertEquals(entry.getValue(), persisted.path("choices").path("service").path("name").asText());
+            assertEquals(persisted, json.readTree(json.writeValueAsString(reply.get("bookingDraft"))));
+            if ("GROCERY_SHOPPING".equals(persisted.path("choices").path("service").path("serviceType").asText())) {
+                var data = persisted.path("data");
+                assertTrue(data.path("packageId").asLong() > 0);
+                assertEquals(1, data.path("quantity").asInt());
+                assertFalse(data.has("addressId"));
+                assertFalse(data.has("answers"));
+            }
+        }));
     }
 
     @TestFactory

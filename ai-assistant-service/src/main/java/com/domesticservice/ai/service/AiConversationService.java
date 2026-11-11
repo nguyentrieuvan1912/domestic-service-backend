@@ -2,6 +2,7 @@ package com.domesticservice.ai.service;
 
 import com.domesticservice.common.web.ServiceHttpClient;
 import java.util.*;
+import java.util.regex.Pattern;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -16,6 +17,10 @@ import com.domesticservice.ai.repository.AiConversationSqlRepository;
 
 @Service
 public class AiConversationService {
+    private static final Pattern INTERNAL_GUIDANCE_FOOTER = Pattern.compile(
+        "(?imsu)^\\h*(?:\\*\\*)?Hướng dẫn tham khảo(?:\\*\\*)?\\h*:.*\\z");
+    private static final Pattern TOOL_INSTRUCTIONS = Pattern.compile(
+        "(?iu)(?<![^.!?\\r\\n])[^.!?\\r\\n]*\\b(?:gọi|dùng|sử dụng)\\h+công cụ\\h*[\\[`]?[a-z]+(?:_[a-z]+)+[^.!?\\r\\n]*(?:[.!?]|$)");
 
     private final AiConversationSqlRepository repository;
 
@@ -56,7 +61,7 @@ public class AiConversationService {
 
     public List<Map<String, Object>> messages(String token, long id) {
         owned(actor(token), id, false);
-        return repository.messagesFindAiMessages(id);
+        return customerMessages(repository.messagesFindAiMessages(id));
     }
 
     private record Turn(Long responseId, List<Map<String, Object>> context, AiBookingDraftService.Patch draft) {}
@@ -83,7 +88,9 @@ public class AiConversationService {
                 }
                 long userMessage = repository.sendFindAiMessages3(Long.class, id, text, key);
                 var savedDraft = draftReply.prepared() == null ? null : drafts.save(id, user, draftReply.prepared());
+                if (savedDraft == null) repository.setExpandedDraft(id, null);
                 long replyId = repository.sendFindAiMessages4(Long.class, id, draftReply.text());
+                if (!reply.suggestions().isEmpty()) repository.saveSuggestions(replyId, reply.suggestions());
                 if (draftReply.receipt() != null) {
                     var receipt = draftReply.receipt();
                     repository.saveToolReceipt(userMessage, receipt.name(), receipt.status(),
@@ -112,7 +119,16 @@ public class AiConversationService {
 
     private DraftReply prepareDraftReply(String token, long user, long id, AiBookingDraftService.Patch snapshot,
                                          AiProvider.Reply reply) {
-        if (reply.draftChanges().isEmpty()) return new DraftReply(reply.text(), null, null);
+        if (reply.draftChanges().isEmpty()) {
+            String text = customerText(reply.text()).replaceAll(
+                "(?iu)(^|[.!?]\\s+|\\R+)bấm xác nhận trên thẻ",
+                "$1Nếu chat đã có thẻ đơn nháp, bạn có thể bấm Xác nhận trên thẻ");
+            String normalized = AiBusinessTools.catalogWords(text);
+            if (normalized.matches(".*\\b(?:minh|toi|he thong) da (?:luu|tao) (?:don|ban) nhap\\b.*")) {
+                text = "Mình chưa lưu bản nháp ở lượt này. Bạn cho mình biết dịch vụ muốn đặt nhé.";
+            }
+            return new DraftReply(text, null, null);
+        }
         long started = System.nanoTime();
         var patch = new AiBookingDraftService.Patch(snapshot.draftId(), snapshot.version(), reply.draftChanges());
         try {
@@ -134,8 +150,23 @@ public class AiConversationService {
     private Map<String, Object> sentTurn(long conversation, String key, long reply) {
         var result = new LinkedHashMap<String, Object>();
         result.put("id", reply);
-        result.put("messages", repository.turnMessages(conversation, key, reply));
+        result.put("messages", customerMessages(repository.turnMessages(conversation, key, reply)));
         return result;
+    }
+
+    private static List<Map<String, Object>> customerMessages(List<Map<String, Object>> messages) {
+        for (var message : messages) {
+            if ("ASSISTANT".equals(message.get("role")) && message.get("content") instanceof String content) {
+                message.put("content", customerText(content));
+            }
+        }
+        return messages;
+    }
+
+    private static String customerText(String content) {
+        String withoutFooter = INTERNAL_GUIDANCE_FOOTER.matcher(content).replaceFirst("");
+        String text = TOOL_INSTRUCTIONS.matcher(withoutFooter).replaceAll("").strip();
+        return text.isEmpty() ? "Mình chưa có câu trả lời cho yêu cầu này. Bạn thử hỏi lại nhé." : text;
     }
 
     private Turn prepare(long user, long id, String key, String text, String attempt) {
@@ -157,7 +188,7 @@ public class AiConversationService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Đang xử lý một tin nhắn. Vui lòng thử lại.");
         }
         repository.startTurn(id, key, hash, attempt);
-        var context = new ArrayList<>(repository.sendFindAiMessages2(id));
+        var context = new ArrayList<>(customerMessages(repository.sendFindAiMessages2(id)));
         Collections.reverse(context);
         var draft = drafts.snapshot(id, user);
         if (!draft.changes().isEmpty()) {

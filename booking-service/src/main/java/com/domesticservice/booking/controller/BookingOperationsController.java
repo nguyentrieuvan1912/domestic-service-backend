@@ -87,6 +87,11 @@ public class BookingOperationsController {
         return flow.list(token);
     }
 
+    @GetMapping("/customer/statistics")
+    public Map<String, Object> customerStatistics(@RequestHeader(value = "Authorization", required = false) String token) {
+        return flow.customerStatistics(token);
+    }
+
     @GetMapping("/bookings/{id}")
     public Map<String, Object> detail(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id) {
         return flow.detail(token, id);

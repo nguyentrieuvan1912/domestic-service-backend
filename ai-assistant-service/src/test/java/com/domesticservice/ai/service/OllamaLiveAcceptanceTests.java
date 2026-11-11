@@ -72,14 +72,16 @@ class OllamaLiveAcceptanceTests {
                 "clientKey", UUID.randomUUID().toString()));
             assertTrue(jdbc.queryForObject("""
                 SELECT count(*) FROM ai_tool_calls t JOIN ai_messages m ON m.id=t.message_id
-                WHERE m.conversation_id=? AND t.tool_name='recommend_packages_by_area' AND t.status='SUCCEEDED'
+                WHERE m.conversation_id=? AND t.tool_name='recommend_services' AND t.status='SUCCEEDED'
                 """, Integer.class, areaId) > 0);
 
             long faqId = ((Number) service.create(token).get("id")).longValue();
             service.send(token, faqId, Map.of("content", "Chính sách bảo hiểm hư hại của CleanMaster",
                 "clientKey", UUID.randomUUID().toString()));
             String answer = service.messages(token, faqId).getLast().get("content").toString();
-            assertTrue(answer.contains("Khiếu nại, hư hại, bảo hiểm và hỗ trợ"), answer);
+            assertTrue(answer.contains("khiếu nại") || answer.contains("hỗ trợ"), answer);
+            assertFalse(answer.contains("Hướng dẫn tham khảo"), answer);
+            assertFalse(answer.contains("cleanmaster:customer-guide/"), answer);
 
             var proposal = provider.reply(java.util.List.of(Map.of("role", "USER", "content",
                 "Tôi muốn đặt dịch vụ ID 5, vệ sinh 3 máy lạnh vào chiều mai. Hãy lưu thông tin vào bản nháp.")), token);

@@ -1,0 +1,10 @@
+services:
+  whisper-voice:
+    image: ghcr.io/ggml-org/whisper.cpp:main-cuda@sha256:6bd0c2e2778fc749ce97812e420cf9b4e96f2b5978ae3facfcf82d02636f6077
+    gpus: all
+    environment:
+      WHISPER_VOICE_DEVICE: cuda
+      CUDA_CACHE_PATH: /models/.cuda-cache
+  ai-assistant-service:
+    environment:
+      AI_TRANSCRIPTION_FULL_CONTEXT: "true"

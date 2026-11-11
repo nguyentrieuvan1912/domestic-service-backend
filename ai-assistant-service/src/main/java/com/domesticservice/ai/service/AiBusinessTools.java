@@ -3,7 +3,9 @@ package com.domesticservice.ai.service;
 import com.domesticservice.common.web.ServiceHttpClient;
 import java.math.BigDecimal;
 import java.text.Normalizer;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -20,6 +22,9 @@ class AiBusinessTools {
     private static final List<Map<String, Object>> DECLARATIONS = List.of(
         tool("search_services", "Tìm dịch vụ đang hoạt động theo từ khóa ngắn.", Map.of("query", STRING), "query"),
         tool("get_catalog_overview", "Đọc toàn bộ nhóm dịch vụ, dịch vụ và tiện ích bổ sung đang hoạt động.", Map.of()),
+        tool("recommend_services", "Gợi ý dịch vụ và gói theo ngữ nghĩa nhu cầu tiếng Việt. Lọc định mức diện tích, số nhân viên và thời lượng trước khi xếp hạng.",
+            Map.of("query", STRING, "areaM2", Map.of("type", "number", "exclusiveMinimum", 0),
+                "maxStaffCount", INTEGER, "maxDurationMinutes", INTEGER), "query"),
         tool("search_add_ons", "Tìm tiện ích bổ sung và dịch vụ sở hữu theo tên hoặc từ khóa.", Map.of("query", STRING), "query"),
         tool("get_service_details", "Đọc gói, tiện ích và các yêu cầu cần hỏi của dịch vụ.", Map.of("serviceId", INTEGER), "serviceId"),
         tool("recommend_packages_by_area", "Gợi ý gói theo tổng diện tích m² từ Catalog. Dùng serviceId đã tìm được, không dùng để báo giá cuối.",
@@ -27,6 +32,8 @@ class AiBusinessTools {
         tool("get_current_promotions", "Đọc ưu đãi công khai đang có và ưu đãi riêng của khách.", Map.of()),
         tool("get_customer_addresses", "Liệt kê ID và phường/xã của địa chỉ đã lưu của khách.", Map.of()),
         tool("get_my_booking", "Tra trạng thái đơn của khách bằng ID số.", Map.of("bookingId", INTEGER), "bookingId"),
+        tool("get_my_bookings", "Xem các đơn gần đây của khách hoặc tìm theo mã đơn chính xác.",
+            Map.of("reference", STRING)),
         tool("check_staff_availability", "Đếm nhân viên phù hợp tại địa chỉ và giờ cụ thể. Không giữ chỗ.",
             Map.of("serviceId", INTEGER, "addressId", INTEGER, "startsAt", STRING, "durationMinutes", INTEGER),
             "serviceId", "addressId", "startsAt", "durationMinutes"),
@@ -40,14 +47,17 @@ class AiBusinessTools {
     private final ServiceHttpClient identity;
     private final ServiceHttpClient booking;
     private final ObjectMapper json;
+    private final CatalogSemanticRecommendations recommendations;
 
     AiBusinessTools(@Value("${clients.catalog.base-url}") String catalogUrl,
                     @Value("${clients.identity.base-url}") String identityUrl,
-                    @Value("${clients.booking.base-url}") String bookingUrl, ObjectMapper json) {
+                    @Value("${clients.booking.base-url}") String bookingUrl, ObjectMapper json,
+                    CatalogSemanticRecommendations recommendations) {
         catalog = new ServiceHttpClient(catalogUrl);
         identity = new ServiceHttpClient(identityUrl);
         booking = new ServiceHttpClient(bookingUrl);
         this.json = json;
+        this.recommendations = recommendations;
     }
 
     static Map<String, Object> tool(String name, String description, Map<String, Object> fields, String... required) {
@@ -60,6 +70,10 @@ class AiBusinessTools {
     }
 
     List<Map<String, Object>> activeServices() {
+        return activeServices(catalog);
+    }
+
+    static List<Map<String, Object>> activeServices(ServiceHttpClient catalog) {
         var services = new ArrayList<Map<String, Object>>();
         int page = 0;
         int totalPages;
@@ -82,23 +96,58 @@ class AiBusinessTools {
         return switch (name) {
             case "search_services" -> searchServices(args);
             case "get_catalog_overview" -> catalogOverview();
+            case "recommend_services" -> json.convertValue(recommendations.recommend(
+                json.convertValue(args, CatalogSemanticRecommendations.Query.class)), new tools.jackson.core.type.TypeReference<Map<String, Object>>() {});
             case "search_add_ons" -> searchAddOns(args);
             case "recommend_packages_by_area" -> recommendPackages(args);
             case "get_service_details" -> catalog.get("/api/v1/catalog/services/" + id(args, "serviceId"), null);
-            case "get_current_promotions" -> Map.of(
-                "public", catalog.list("/api/v1/catalog/promotions", null).stream()
-                    .filter(item -> Boolean.TRUE.equals(item.get("isActive"))).limit(12).toList(),
-                "personal", catalog.list("/api/v1/catalog/customer/vouchers", token).stream()
-                    .filter(item -> item.get("used_count") instanceof Number n && n.intValue() == 0)
-                    .limit(12).map(item -> fields(item, "code", "discount", "expires_at")).toList());
+            case "get_current_promotions" -> currentPromotions(token);
             case "get_customer_addresses" -> Map.of("addresses", identity.list("/api/v1/identity/customer/addresses", token)
                 .stream().limit(15).map(item -> fields(item, "id", "ward", "district", "isDefault")).toList());
             case "get_my_booking" -> fields(booking.get("/api/v1/booking/bookings/" + id(args, "bookingId"), token),
                 "id", "bookingCode", "status", "paymentStatus", "startsAt", "totalAmount");
+            case "get_my_bookings" -> recentBookings(args.path("reference").asText(""), token);
             case "check_staff_availability" -> availability(args, token);
             case "get_price_quote" -> quote(args, token);
             default -> throw new IllegalArgumentException();
         };
+    }
+
+    private Map<String, Object> currentPromotions(String token) {
+        var publicPromotions = catalog.list("/api/v1/catalog/promotions", null).stream()
+            .filter(item -> Boolean.TRUE.equals(item.get("isActive"))).limit(12).toList();
+        try {
+            Instant now = Instant.now();
+            var personal = catalog.list("/api/v1/catalog/customer/vouchers", token).stream()
+                .filter(item -> item.get("used_count") instanceof Number n && n.intValue() == 0
+                    && isBeforeExpiry(item.get("expires_at"), now))
+                .limit(12).map(item -> fields(item, "code", "name", "discount", "expires_at")).toList();
+            return Map.of("public", publicPromotions, "personal", personal);
+        } catch (ResponseStatusException failure) {
+            return Map.of("public", publicPromotions, "personal", List.of(), "personalUnavailable", true);
+        }
+    }
+
+    private static boolean isBeforeExpiry(Object expiry, Instant now) {
+        try {
+            return Instant.parse(Objects.toString(expiry, "")).isAfter(now);
+        } catch (DateTimeParseException invalidExpiry) {
+            return false;
+        }
+    }
+
+    private Map<String, Object> recentBookings(String reference, String token) {
+        if (reference.length() > 50) throw new IllegalArgumentException();
+        var rows = booking.list("/api/v1/booking/bookings", token).stream()
+            .filter(row -> reference.isBlank() || reference.equalsIgnoreCase(Objects.toString(row.get("bookingCode"), "")))
+            .limit(5).map(row -> {
+                var summary = fields(row, "id", "bookingCode", "status", "paymentStatus", "bookingDate", "startTime");
+                if (row.get("service") instanceof Map<?, ?> service && service.get("name") instanceof String name) {
+                    summary.put("serviceName", name);
+                }
+                return summary;
+            }).toList();
+        return Map.of("items", rows);
     }
 
     private Map<String, Object> searchServices(JsonNode args) {

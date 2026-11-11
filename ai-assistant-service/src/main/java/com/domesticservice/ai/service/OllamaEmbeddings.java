@@ -59,7 +59,11 @@ class OllamaEmbeddings {
     }
 
     List<Double> query(String question) {
-        return documents(List.of("Instruct: Retrieve official CleanMaster customer guidance relevant to the question.\nQuery: " + question)).getFirst();
+        return query(question, "Retrieve official CleanMaster customer guidance relevant to the question.");
+    }
+
+    List<Double> query(String question, String instruction) {
+        return documents(List.of("Instruct: " + instruction + "\nQuery: " + question)).getFirst();
     }
 
     private static ResponseStatusException unavailable() {

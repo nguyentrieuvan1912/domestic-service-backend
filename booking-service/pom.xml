@@ -10,6 +10,7 @@
     </parent>
     <artifactId>booking-service</artifactId>
     <dependencies>
+        <dependency><groupId>com.google.ortools</groupId><artifactId>ortools-java</artifactId><version>9.15.6755</version></dependency>
         <dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId><scope>provided</scope><optional>true</optional></dependency>
         <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>
         <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-validation</artifactId></dependency>
@@ -25,5 +26,14 @@
     <build><plugins><plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
+        <configuration>
+            <requiresUnpack>
+                <dependency><groupId>com.google.ortools</groupId><artifactId>ortools-linux-x86-64</artifactId></dependency>
+                <dependency><groupId>com.google.ortools</groupId><artifactId>ortools-linux-aarch64</artifactId></dependency>
+                <dependency><groupId>com.google.ortools</groupId><artifactId>ortools-win32-x86-64</artifactId></dependency>
+                <dependency><groupId>com.google.ortools</groupId><artifactId>ortools-darwin-x86-64</artifactId></dependency>
+                <dependency><groupId>com.google.ortools</groupId><artifactId>ortools-darwin-aarch64</artifactId></dependency>
+            </requiresUnpack>
+        </configuration>
     </plugin></plugins></build>
 </project>
