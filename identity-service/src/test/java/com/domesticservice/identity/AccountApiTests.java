@@ -124,6 +124,29 @@ class AccountApiTests {
         assertThat(db.queryForObject("SELECT province FROM addresses WHERE id=?",String.class,id)).isEqualTo("TP. Hồ Chí Minh");
     }
 
+    @Test void customerAddressCoordinatesPersistAndFollowManualEdits() throws Exception {
+        String customer=token(request("POST","/auth/register",registration(),null));
+        var body=new LinkedHashMap<String,Object>(Map.of("title","Nhà riêng","recipientName","Người nhận",
+            "recipientPhone","0900000002","streetAddress","123 Đường thử","district","Quận 1","city","TP. Hồ Chí Minh"));
+        body.put("latitude",10.7769); body.put("longitude",106.7009);
+        var saved=request("POST","/customer/addresses",body,customer);
+        assertThat(saved.statusCode()).isEqualTo(201);
+        long id=json.readTree(saved.body()).get("id").asLong();
+        assertThat(json.readTree(saved.body()).get("latitude").asDouble()).isEqualTo(10.7769);
+        assertThat(db.queryForObject("SELECT longitude FROM addresses WHERE id=?",Double.class,id)).isEqualTo(106.7009);
+        body.remove("latitude"); body.remove("longitude"); body.put("note","Tầng 2");
+        assertThat(request("PUT","/customer/addresses/"+id,body,customer).statusCode()).isEqualTo(200);
+        assertThat(db.queryForObject("SELECT latitude FROM addresses WHERE id=?",Double.class,id)).isEqualTo(10.7769);
+        body.put("streetAddress","456 Địa chỉ khác");
+        assertThat(request("PUT","/customer/addresses/"+id,body,customer).statusCode()).isEqualTo(200);
+        assertThat(db.queryForObject("SELECT latitude FROM addresses WHERE id=?",Double.class,id)).isNull();
+        body.put("latitude",91); body.put("longitude",106);
+        assertThat(request("PUT","/customer/addresses/"+id,body,customer).statusCode()).isEqualTo(400);
+        body.put("latitude",10.7); body.remove("longitude");
+        assertThat(request("PUT","/customer/addresses/"+id,body,customer).statusCode()).isEqualTo(400);
+        assertThat(db.queryForObject("SELECT latitude FROM addresses WHERE id=?",Double.class,id)).isNull();
+    }
+
     @Test void customerAddressesPersistAndEnforceOwnership() throws Exception {
         String customer=token(request("POST","/auth/register",registration(),null));
         String other=token(request("POST","/auth/register",Map.of("fullName","Khách khác","phone","0900000010","email","other@test.invalid","password","Customer!123"),null));

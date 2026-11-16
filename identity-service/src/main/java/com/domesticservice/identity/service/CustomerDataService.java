@@ -62,14 +62,25 @@ public class CustomerDataService {
                 throw error(HttpStatus.BAD_REQUEST, "Vui lòng chọn phường/xã hợp lệ trong danh sách TP. Hồ Chí Minh.");
         }
         final String savedProvince = province;
+        if ((body.latitude() == null) != (body.longitude() == null))
+            throw error(HttpStatus.BAD_REQUEST, "Vui lòng cung cấp đủ cả vĩ độ và kinh độ.");
+        Object latitude = body.latitude();
+        Object longitude = body.longitude();
+        // Older clients omit coordinates. Keep a saved pin only while its address still matches.
+        if (latitude == null && existing != null && Objects.equals(existing.get("streetAddress"), body.streetAddress().strip())
+            && Objects.equals(existing.get("ward"), ward) && Objects.equals(existing.get("district"), district)
+            && Objects.equals(existing.get("city"), savedProvince)) {
+            latitude = existing.get("latitude");
+            longitude = existing.get("longitude");
+        }
         boolean isDefault = Boolean.TRUE.equals(body.isDefault()) || (existing != null && Boolean.TRUE.equals(existing.get("isDefault"))) || !Boolean.TRUE.equals(repository.saveAddressExistsAddresses(Boolean.class, user.id()));
         if (isDefault)
             repository.saveAddressUpdateAddresses(user.id());
         String phone = body.recipientPhone().startsWith("+84") ? "0" + body.recipientPhone().substring(3) : body.recipientPhone();
         if (id == null) {
-            id = repository.saveAddressInsertAddresses(user.id(), body.title().strip(), body.recipientName().strip(), phone, savedProvince, district, ward, body.streetAddress().strip(), Objects.toString(body.note(), "").strip(), isDefault);
+            id = repository.saveAddressInsertAddresses(user.id(), body.title().strip(), body.recipientName().strip(), phone, savedProvince, district, ward, body.streetAddress().strip(), Objects.toString(body.note(), "").strip(), isDefault, latitude, longitude);
         } else
-            repository.saveAddressUpdateAddresses2(body.title().strip(), body.recipientName().strip(), phone, savedProvince, district, ward, body.streetAddress().strip(), Objects.toString(body.note(), "").strip(), isDefault, id, user.id());
+            repository.saveAddressUpdateAddresses2(body.title().strip(), body.recipientName().strip(), phone, savedProvince, district, ward, body.streetAddress().strip(), Objects.toString(body.note(), "").strip(), isDefault, latitude, longitude, id, user.id());
         return address(user, id);
     }
 

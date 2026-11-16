@@ -19,4 +19,8 @@ public class FinanceStatisticsController {
     public Map<String, Object> stats(@RequestHeader(value = "Authorization", required = false) String token, @RequestParam(defaultValue = "2026") int year) {
         return service.stats(token, year);
     }
+    @GetMapping("/statistics/details")
+    public List<Map<String,Object>> details(@RequestHeader(value="Authorization",required=false) String token,@RequestParam int year) {
+        return service.details(token,year);
+    }
 }

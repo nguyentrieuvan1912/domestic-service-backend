@@ -49,11 +49,11 @@ public class CustomerDataSqlRepository {
     }
 
     public long saveAddressInsertAddresses(Object... args) {
-        return insert("INSERT INTO addresses(customer_id,title,receiver_name,receiver_phone,province,district,ward,detail_address,note,is_default) VALUES (?,?,?,?,?,?,?,?,?,?)", args);
+        return insert("INSERT INTO addresses(customer_id,title,receiver_name,receiver_phone,province,district,ward,detail_address,note,is_default,latitude,longitude) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", args);
     }
 
     public int saveAddressUpdateAddresses2(Object... args) {
-        return db.update("UPDATE addresses SET title=?,receiver_name=?,receiver_phone=?,province=?,district=?,ward=?,detail_address=?,note=?,is_default=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND customer_id=?", args);
+        return db.update("UPDATE addresses SET title=?,receiver_name=?,receiver_phone=?,province=?,district=?,ward=?,detail_address=?,note=?,is_default=?,latitude=?,longitude=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND customer_id=?", args);
     }
 
     public int setDefaultUpdateAddresses(Object... args) {

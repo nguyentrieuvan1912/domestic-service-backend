@@ -20,7 +20,7 @@ Email được trim/lowercase; số điện thoại `0` + 9 số hoặc `+84` + 
 Tên tối đa 160 ký tự; email tối đa 254; mật khẩu tối thiểu 8 ký tự, tối đa 72 byte UTF-8, BCrypt cost 12.
 Email/số điện thoại trùng → 409; thông tin sai, tài khoản INACTIVE/BLOCKED → 401.
 
-Token là 32 byte ngẫu nhiên, base64url, hạn 8 giờ. Database `account_sessions` chỉ lưu SHA-256 của token.
+Token là 32 byte ngẫu nhiên, base64url. Phiên mới của nhân viên có hạn 24 giờ, phiên khách hàng và quản trị viên có hạn 8 giờ. Database `account_sessions` chỉ lưu SHA-256 của token.
 Gửi `Authorization: Bearer <accessToken>`; mỗi yêu cầu kiểm tra phiên chưa hết hạn và users.status ACTIVE.
 Khóa/tạm ngưng xóa toàn bộ phiên; mở khóa không khôi phục phiên cũ. Logout xóa một phiên.
 Response auth/admin có `Cache-Control: no-store`. Web lưu phiên ở sessionStorage riêng cho ADMIN/CUSTOMER.

@@ -109,10 +109,12 @@ public class AccountService {
         byte[] bytes = new byte[32];
         new SecureRandom().nextBytes(bytes);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        Instant expiry = Instant.now().plus(8, ChronoUnit.HOURS);
+        User account = user(id);
+        long sessionHours = "STAFF".equals(account.role()) ? 24 : 8;
+        Instant expiry = Instant.now().plus(sessionHours, ChronoUnit.HOURS);
         repository.issueDeleteAccountSessions();
         repository.issueInsertAccountSessions(id, digest(token), Timestamp.from(expiry));
-        return new Session(token, expiry, user(id));
+        return new Session(token, expiry, account);
     }
 
     private String digest(String token) {

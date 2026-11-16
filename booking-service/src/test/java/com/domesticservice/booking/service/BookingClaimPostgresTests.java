@@ -19,6 +19,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.server.ResponseStatusException;
 import tools.jackson.databind.ObjectMapper;
 import static org.junit.jupiter.api.Assertions.*;
@@ -33,7 +34,7 @@ class BookingClaimPostgresTests {
     @Profile("booking-claim-verification")
     @EnableAutoConfiguration
     @EntityScan("com.domesticservice.booking.entity")
-    @Import({NativeQueryExecutor.class,BookingOperationsSqlRepository.class,BookingWorkflowSqlRepository.class,BookingWorkflowService.class,BookingCreationSqlRepository.class,StaffResponseSqlRepository.class})
+    @Import({NativeQueryExecutor.class,BookingOperationsSqlRepository.class,BookingWorkflowSqlRepository.class,BookingWorkflowService.class,BookingCreationSqlRepository.class,StaffResponseSqlRepository.class,StaffDispatchService.class,StaffDispatchSolver.class,BookingEventDispatcherSqlRepository.class})
     static class Config {
         @Bean(destroyMethod="stop") IdentityPeer identityPeer() throws Exception { return new IdentityPeer(); }
         @Bean BookingOperationsService operations(BookingOperationsSqlRepository repository, ObjectMapper json, IdentityPeer peer) {
@@ -42,12 +43,23 @@ class BookingClaimPostgresTests {
     }
     static class IdentityPeer {
         final HttpServer server;
+        volatile String directory = "[]";
+        final List<String> notifications = new CopyOnWriteArrayList<>();
         IdentityPeer() throws Exception {
             server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
             server.createContext("/",exchange->{
                 String token=exchange.getRequestHeaders().getFirst("Authorization");
-                long id=Long.parseLong(token.replace("Bearer ",""));
-                byte[] bytes=("{\"id\":"+id+",\"role\":\"STAFF\",\"status\":\"ACTIVE\",\"staffStatus\":\"AVAILABLE\",\"isOnline\":true,\"fullName\":\"Concurrency verification\"}").getBytes(StandardCharsets.UTF_8);
+                String body;
+                if (exchange.getRequestURI().getPath().endsWith("/staff-directory")) body = directory;
+                else if (exchange.getRequestURI().getPath().endsWith("/internal/events")) {
+                    notifications.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+                    body = "{}";
+                }
+                else {
+                    long id=Long.parseLong(token.replace("Bearer ",""));
+                    body = "{\"id\":"+id+",\"role\":\"STAFF\",\"status\":\"ACTIVE\",\"staffStatus\":\"AVAILABLE\",\"isOnline\":true,\"fullName\":\"Concurrency verification\"}";
+                }
+                byte[] bytes=body.getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("Content-Type","application/json");
                 exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);exchange.close();
             });server.start();
@@ -57,10 +69,16 @@ class BookingClaimPostgresTests {
     }
     @Autowired JdbcTemplate db;
     @Autowired BookingWorkflowService workflow;
+    @Autowired StaffDispatchService dispatch;
+    @Autowired IdentityPeer identity;
+    @Autowired BookingEventDispatcherSqlRepository dispatcherRepository;
+    @Autowired ObjectMapper json;
+    @Autowired PlatformTransactionManager manager;
     long seed; LocalDate date; Instant start;
     final List<Long> bookings=new ArrayList<>();
 
     @BeforeEach void prepare() {
+        identity.notifications.clear();
         seed=1_000_000_000L+ThreadLocalRandom.current().nextInt(900_000_000);
         date=LocalDate.now(BookingOperationsService.ZONE).plusDays(2);
         start=date.atTime(9,0).atZone(BookingOperationsService.ZONE).toInstant();
@@ -123,6 +141,77 @@ class BookingClaimPostgresTests {
         Double renewed=db.queryForObject("SELECT extract(epoch FROM (staff_response_deadline-clock_timestamp())) FROM bookings WHERE id=?",Double.class,id);
         assertNotNull(renewed);assertTrue(renewed>295 && renewed<=300,"Renewal deadline must be five minutes");
         assertEquals(2,db.queryForObject("SELECT staff_wait_round FROM bookings WHERE id=?",Integer.class,id));
+    }
+
+    @Test void dispatchPersistsRealEligibleTeamsAndLeavesAcceptanceToStaff() {
+        long batchJob = booking(2), invitation = booking(1), outside = booking(1);
+        db.update("UPDATE bookings SET booking_mode='MODE_A',staff_wait_state='WAITING',staff_response_deadline=now()+interval '5 minutes' WHERE id=?", invitation);
+        db.update("INSERT INTO booking_assignments(booking_id,staff_id,status) VALUES (?,?,'ASSIGNED')", invitation, seed);
+        db.update("UPDATE bookings SET address_snapshot='{\"city\":\"Other city\",\"ward\":\"Verification ward\"}' WHERE id=?", outside);
+        publishDirectory();
+        var run = dispatch.runAutomatically();
+        assertNotNull(run);
+        try {
+            assertTrue(db.queryForObject("SELECT admin_id IS NULL FROM staff_dispatch_runs WHERE id=?", Boolean.class, run.id()));
+            assertTrue(run.result().path("snapshotAt").isTextual());
+            assertEquals(2, run.result().path("solver").path("proposal").path("covered").asInt());
+            var teams = run.result().path("solver").path("proposal").path("teams");
+            assertEquals(List.of(seed + 1, seed + 2), teams.path(Long.toString(batchJob)).valueStream().map(staff -> staff.path("staffId").asLong()).toList());
+            assertEquals(seed, teams.path(Long.toString(invitation)).path(0).path("staffId").asLong());
+            assertFalse(teams.has(Long.toString(outside)));
+            assertFalse(teams.path(Long.toString(invitation)).path(0).path("components").has("distance"));
+            assertEquals(0, accepted(batchJob));
+            assertEquals(0, db.queryForObject("SELECT count(*) FROM staff_reservations WHERE booking_id=?", Integer.class, batchJob));
+            assertTrue(claim(seed + 1, batchJob));
+            assertEquals("MATCHING", db.queryForObject("SELECT status FROM bookings WHERE id=?", String.class, batchJob));
+            assertTrue(claim(seed + 2, batchJob));
+            assertEquals("CONFIRMED", db.queryForObject("SELECT status FROM bookings WHERE id=?", String.class, batchJob));
+        } finally {
+            db.update("DELETE FROM staff_dispatch_runs WHERE id=?", run.id());
+        }
+    }
+
+    @Test void automaticDispatchNotifiesPreferredStaffThenWidensWithoutAnAdmin() {
+        long job = booking(1), customer = seed + 10;
+        db.update("UPDATE bookings SET customer_id=? WHERE id=?", customer, job);
+        publishDirectory();
+        db.update("""
+            INSERT INTO outbox_events(aggregate_type,aggregate_id,event_type,payload)
+            VALUES ('BOOKING',?,'MATCHING','{"status":"MATCHING","oldStatus":"PENDING"}')
+            """, job);
+        var dispatcher = new BookingEventDispatcher(dispatcherRepository, json, workflow, dispatch, manager,
+            identity.url(), "verify-only");
+        try {
+            dispatcher.dispatch();
+            assertEquals(1, identity.notifications.size());
+            var first = json.readTree(identity.notifications.getFirst()).path("userIds").valueStream()
+                .map(node -> node.asLong()).toList();
+            assertEquals(2, first.size());
+            assertTrue(first.contains(customer));
+            long preferred = first.stream().filter(id -> id != customer).findFirst().orElseThrow();
+            assertTrue(preferred >= seed && preferred <= seed + 2);
+            assertEquals(0, accepted(job));
+
+            dispatcher.dispatch();
+            assertEquals(1, identity.notifications.size());
+            assertEquals(1, db.update("UPDATE outbox_events SET created_at=now()-interval '2 minutes' WHERE aggregate_id=? AND event_type='MATCHING_BROADCAST'", job));
+            dispatcher.dispatch();
+            assertEquals(2, identity.notifications.size());
+            var later = json.readTree(identity.notifications.getLast()).path("userIds").valueStream()
+                .map(node -> node.asLong()).toList();
+            assertEquals(List.of(seed, seed + 1, seed + 2).stream().filter(id -> id != preferred).toList(), later);
+            assertEquals(0, accepted(job));
+        } finally {
+            db.update("DELETE FROM staff_dispatch_runs WHERE jsonb_exists(result->'solver'->'proposal'->'teams',?)", Long.toString(job));
+        }
+    }
+
+    private void publishDirectory() {
+        identity.directory = """
+            [{"id":%d,"fullName":"A","status":"AVAILABLE","isOnline":true},
+             {"id":%d,"fullName":"B","status":"AVAILABLE","isOnline":true},
+             {"id":%d,"fullName":"C","status":"AVAILABLE","isOnline":true}]
+            """.formatted(seed, seed + 1, seed + 2);
     }
 
     @Test void twoStaffRaceForOnePosition() throws Exception {
