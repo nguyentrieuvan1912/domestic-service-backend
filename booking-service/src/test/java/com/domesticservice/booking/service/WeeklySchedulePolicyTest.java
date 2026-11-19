@@ -30,4 +30,10 @@ class WeeklySchedulePolicyTest {
         assertTrue(WeeklySchedulePolicy.covers(List.of(p("08:00","10:00"),p("10:00","12:00")),at("09:00"),at("11:00")));
         assertFalse(WeeklySchedulePolicy.covers(List.of(p("08:00","10:00")),at("09:00"),at("11:00")));
     }
+    @Test void newShiftsRequireAnHourWhileExistingHalfHoursCanBeKept() {
+        var half = p("08:30","09:00");
+        assertThrows(ResponseStatusException.class, () -> WeeklySchedulePolicy.requireMinimumHour(List.of(), List.of(half), at("08:00")));
+        assertDoesNotThrow(() -> WeeklySchedulePolicy.requireMinimumHour(List.of(half), List.of(half), at("08:00")));
+        assertDoesNotThrow(() -> WeeklySchedulePolicy.requireMinimumHour(List.of(), List.of(p("08:30","09:30")), at("08:00")));
+    }
 }

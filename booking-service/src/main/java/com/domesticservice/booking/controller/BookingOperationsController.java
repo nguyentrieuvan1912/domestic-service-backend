@@ -31,6 +31,11 @@ public class BookingOperationsController {
         return ops.saveSchedule(token, body);
     }
 
+    @PutMapping("/staff/me/areas")
+    public Map<String, Object> saveAreas(@RequestHeader(value = "Authorization", required = false) String token, @RequestBody Map<String, Object> body) {
+        return ops.saveStaffAreas(token, body);
+    }
+
     @GetMapping("/staff/me/capabilities")
     public Map<String, Object> capabilities(@RequestHeader(value = "Authorization", required = false) String token) {
         long id = ServiceHttpClient.userId(ops.actor(token, "STAFF"));

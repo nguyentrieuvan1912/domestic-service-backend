@@ -36,6 +36,16 @@ public class FinanceOperationsController {
         return ops.saveBank(token, b);
     }
 
+    @PutMapping("/staff/me/bank-accounts/{id}/default")
+    public List<Map<String, Object>> defaultBank(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id) {
+        return ops.setDefaultBank(token, id);
+    }
+
+    @DeleteMapping("/staff/me/bank-accounts/{id}")
+    public List<Map<String, Object>> unlinkBank(@RequestHeader(value = "Authorization", required = false) String token, @PathVariable long id) {
+        return ops.unlinkBank(token, id);
+    }
+
     @PostMapping("/staff/me/withdrawals")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> withdraw(@RequestHeader(value = "Authorization", required = false) String token, @RequestBody Map<String, Object> b) {

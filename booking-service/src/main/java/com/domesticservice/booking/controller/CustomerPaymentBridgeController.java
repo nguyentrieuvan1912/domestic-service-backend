@@ -9,4 +9,6 @@ public class CustomerPaymentBridgeController {
  public CustomerPaymentBridgeController(CustomerPaymentBridge bridge){this.bridge=bridge;}
  @GetMapping("/{id}") public Map<String,Object> snapshot(@RequestHeader(value="X-Service-Key",required=false) String key,@PathVariable long id){bridge.authorize(key);return bridge.snapshot(id);}
  @PostMapping("/{id}/reconcile-payment") public void reconcile(@RequestHeader(value="X-Service-Key",required=false) String key,@PathVariable long id){bridge.authorize(key);bridge.reconcile(id);}
+ @PutMapping("/{id}/payment-method") public Map<String,Object> changeMethod(@RequestHeader(value="X-Service-Key",required=false) String key,@PathVariable long id,@RequestBody MethodChange body){bridge.authorize(key);return bridge.changeMethod(id,body.customerId(),body.method());}
+ public record MethodChange(long customerId, String method) {}
 }

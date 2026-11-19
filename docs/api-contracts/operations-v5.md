@@ -46,8 +46,10 @@ Booking ưu tiên ward mới; snapshot lịch sử chỉ có district vẫn đ�
 ### Đăng ký lịch tuần (15/10/2026)
 
 - GET `/api/v1/booking/staff/me/availability`: `saved.days` gồm 14 ngày từ thứ Hai tuần hiện tại, `saved.registeredWeekStarts` liệt kê tuần đã xác nhận; giữ revision, areaIds và matchNotifications.
-- PUT cùng endpoint: `{weekStart:"YYYY-MM-DD",days:[{date,intervals:[{startsAt,endsAt}]}],confirmedDates:["YYYY-MM-DD"],areaIds:["Phường Sài Gòn"],matchNotifications:true,revision:0}`. Gửi đủ 7 ngày của tuần hiện tại hoặc tuần kế tiếp. Người dùng chọn ca làm hoặc Nghỉ cho từng ngày còn lại; confirmedDates phải bao gồm đủ các ngày từ hôm nay trở đi trong tuần được lưu. Ngày đã xác nhận nghỉ có intervals rỗng. Xác nhận một lần cho cả tuần, không tự lặp lịch sang tuần mới.
-- Chỉ thay các ngày thuộc tuần đã gửi; giữ lịch tuần khác và phần thời gian đã qua. Server so sánh độ bao phủ trước thời điểm lưu, không tin giờ máy khách. Khoảng rảnh đang diễn ra có thể thay phần tương lai nếu giữ nguyên phần đã qua. 08:00–20:00, bước 30 phút; toàn bộ ca đã nhận phải còn được bao phủ, kể cả khi hai khoảng liền nhau.
+- PUT cùng endpoint nhận `{weekStart:"YYYY-MM-DD",days:[{date,intervals:[{startsAt,endsAt}]}],confirmedDates:["YYYY-MM-DD"],matchNotifications:true,revision:0}`. Gửi đủ 7 ngày của tuần hiện tại hoặc tuần kế tiếp. `confirmedDates` bao gồm đủ các ngày từ hôm nay trở đi trong tuần được lưu. Ngày đã xác nhận nghỉ có `intervals` rỗng. `areaIds` vẫn được chấp nhận từ ứng dụng cũ.
+- PUT `/api/v1/booking/staff/me/areas` nhận `{areaIds:["Phường Sài Gòn"],revision:0}`. Lưu riêng tối đa 30 phường, xã hoặc đặc khu từ danh mục Identity và trả về snapshot mới. Giữ phường, xã của ca đã nhận.
+- Web quản trị gửi `scheduleRevision` cùng `areaIds` khi chỉnh khu vực qua PUT `/api/v1/booking/admin/staff/{id}/operations`. Revision cũ trả 409 để giữ cập nhật mới hơn của nhân viên.
+- Chỉ thay các ngày thuộc tuần đã gửi và giữ phần thời gian đã qua. Server so sánh độ bao phủ trước thời điểm lưu. Ca mới tối thiểu 1 giờ trong khoảng 08:00–20:00, với giờ bắt đầu theo bước 30 phút. Toàn bộ ca đã nhận phải còn được bao phủ, kể cả khi hai khoảng liền nhau.
 - 400: tuần/ngày/giờ/khu vực không hợp lệ; 409: revision cũ, sửa thời gian quá khứ hoặc làm mất khoảng rảnh/phường mới của ca đã nhận. Không commit một phần khi lỗi.
 - Đăng ký lịch tuần là điều kiện đầu tiên trong eligibility dùng chung cho tìm nhân viên theo giờ khách đặt, tạo Mode A, matching và claim. Tuần chưa có bản ghi staff_schedule_weeks trả duy nhất SCHEDULE_REQUIRED, không xét tiếp các điều kiện khác. Sau đăng ký vẫn phải đủ năng lực, khu vực, trực tuyến, khoảng rảnh bao phủ ca và không trùng lịch. Đăng ký nghỉ cả tuần không tạo giờ rảnh để nhận đơn.
 - Mobile hiển thị nhắc đăng ký các ngày còn lại khi Staff vào app hoặc quay lại app. Lưu đủ tuần thì không nhắc; sang tuần mới chưa đăng ký thì nhắc lại. Trên màn đăng ký không hiện modal nhắc để tránh cản thao tác.
@@ -89,7 +91,8 @@ Giá hiện tại: giá gói × số lượng ITEM × ceil(số Staff / Staff m�
 | GET /bookings, /bookings/{id}, /bookings/{id}/history | Theo scope | Customer sở hữu; Staff đã nhận ca; Admin tất cả |
 | POST /bookings/{id}/cancel | CUSTOMER sở hữu hoặc ADMIN | Hủy ở trạng thái cho phép, giải phóng slot/đóng chat; không giả hoàn tiền |
 | GET /customer/staff | CUSTOMER | serviceId/addressId/startsAt/durationMinutes, lọc Staff phù hợp |
-| GET, PUT /staff/me/availability | STAFF | Lịch rảnh/khu vực/revision; không bỏ ca đã nhận |
+| GET, PUT /staff/me/availability | STAFF | Lịch tuần và revision, GET kèm khu vực đã lưu |
+| PUT /staff/me/areas | STAFF | Cập nhật khu vực phục vụ điều phối |
 | GET /staff/me/capabilities | STAFF | Năng lực và hạn chế của chính mình; ẩn ghi chú nội bộ |
 | GET, PUT /admin/staff/{id}/operations | ADMIN | Phê duyệt năng lực, khu vực, hạn chế; GET hỗ trợ period ALL/CURRENT/PREVIOUS |
 | GET /staff/me/matching, /staff/me/assignments | STAFF | Cơ hội đã lọc và ca đã nhận |

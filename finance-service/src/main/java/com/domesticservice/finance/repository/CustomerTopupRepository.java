@@ -14,7 +14,7 @@ public class CustomerTopupRepository {
     }
     public Map<String, Object> request(long staff, long amount, String key, Long bookingId) {
         lockWallet(staff);
-        var old = db.queryForList("SELECT * FROM customer_topups WHERE customer_id=? AND (request_key=? OR booking_id=?)", staff, key, bookingId);
+        var old = db.queryForList("SELECT * FROM customer_topups WHERE customer_id=? AND (request_key=? OR (booking_id=? AND retired_at IS NULL))", staff, key, bookingId);
         if (!old.isEmpty()) return old.getFirst();
         long id = db.insert("INSERT INTO customer_topups(customer_id,amount,request_key,description,booking_id) VALUES (?,?,?,'NAP',?)", staff, amount, key, bookingId);
         db.update("UPDATE customer_topups SET description=? WHERE id=?", "NAP" + Long.toString(id,36).toUpperCase(Locale.ROOT), id);
@@ -23,6 +23,16 @@ public class CustomerTopupRepository {
     public Map<String, Object> find(long id, boolean lock) {
         var rows = db.queryForList("SELECT * FROM customer_topups WHERE id=?" + (lock ? " FOR UPDATE" : ""), id);
         return rows.isEmpty() ? null : rows.getFirst();
+    }
+    public Map<String, Object> bookingAttempt(long bookingId, long customer) {
+        var rows = db.queryForList("SELECT * FROM customer_topups WHERE booking_id=? AND customer_id=? AND retired_at IS NULL", bookingId, customer);
+        return rows.isEmpty() ? null : rows.getFirst();
+    }
+    public Long lastBookingAttempt(long bookingId) {
+        return db.queryForObject("SELECT max(id) FROM customer_topups WHERE booking_id=?", Long.class, bookingId);
+    }
+    public boolean retire(long id) {
+        return db.update("UPDATE customer_topups SET retired_at=now() WHERE id=? AND retired_at IS NULL AND status IN ('CANCELLED','EXPIRED') AND amount_received=0", id) == 1;
     }
     public List<Map<String, Object>> list(Long staff) {
         return db.queryForList("SELECT * FROM customer_topups" + (staff == null ? "" : " WHERE customer_id=?") + " ORDER BY id DESC LIMIT 100", staff == null ? new Object[]{} : new Object[]{staff});
@@ -38,7 +48,7 @@ public class CustomerTopupRepository {
         db.insert("INSERT INTO customer_wallet_transactions(customer_id,direction,transaction_type,amount,idempotency_key) VALUES (?,'CREDIT','TOP_UP',?,?)",staff,amount,"customer-topup:"+id);
         db.update("UPDATE customer_wallets SET available_balance=available_balance+?,updated_at=now() WHERE customer_id=?",amount,staff);
         var intent=find(id,false);
-        if(intent.get("booking_id") instanceof Number booking){
+        if(intent.get("retired_at")==null && intent.get("booking_id") instanceof Number booking){
             long bookingId=booking.longValue(),price=((Number)intent.get("amount")).longValue();
             long payment=db.insert("INSERT INTO payments(booking_id,customer_id,payment_code,amount,payment_method,provider,transaction_code,status,paid_at) VALUES (?,?,?,?,'BANK_TRANSFER_QR','PAYOS',?,'PAID',now())",bookingId,staff,"CUSTOMER-"+bookingId,price,"customer-topup-"+id);
             db.insert("INSERT INTO customer_wallet_transactions(customer_id,direction,transaction_type,amount,booking_id,idempotency_key) VALUES (?,'DEBIT','PAYMENT',?,?,?)",staff,price,bookingId,"booking:"+bookingId+":pay");
@@ -51,6 +61,6 @@ public class CustomerTopupRepository {
         db.update("INSERT INTO customer_topup_events(event_key,topup_id,payload) VALUES (?,?,CAST(? AS jsonb)) ON CONFLICT(event_key) DO NOTHING", key, id, payload);
     }
     public List<Long> pending() {
-        return db.queryForList("SELECT id FROM customer_topups WHERE status<>'PAID' ORDER BY verified_at NULLS FIRST,id LIMIT 20", Long.class);
+        return db.queryForList("SELECT id FROM customer_topups WHERE status<>'PAID' AND (retired_at IS NULL OR amount_received>0) ORDER BY verified_at NULLS FIRST,id LIMIT 20", Long.class);
     }
 }

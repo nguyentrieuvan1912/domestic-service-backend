@@ -41,20 +41,44 @@ public class FinanceOperationsSqlRepository {
         return db.queryForList("SELECT id,bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",status,is_default AS \"isDefault\" FROM staff_bank_accounts WHERE staff_id=? AND status<>'INACTIVE' ORDER BY is_default DESC,id", args);
     }
 
-    public <T> List<T> saveBankFindStaffBankAccounts(Class<T> type, Object... args) {
-        return db.queryForList("SELECT id FROM staff_bank_accounts WHERE staff_id=? AND bank_code=? AND account_number=?", type, args);
+    public List<Map<String,Object>> bankByDetails(long staff, String code, String account) {
+        return db.queryForList("SELECT id,status,unlinked_at FROM staff_bank_accounts WHERE staff_id=? AND bank_code=? AND account_number=?", staff, code, account);
     }
 
-    public <T> T saveBankFindStaffBankAccounts2(Class<T> type, Object... args) {
-        return db.queryForObject("SELECT status FROM staff_bank_accounts WHERE id=?", type, args);
+    public long insertBank(long staff, String code, String account, String holder) {
+        return insert("INSERT INTO staff_bank_accounts(staff_id,bank_code,account_number,account_holder) VALUES (?,?,?,?)", staff, code, account, holder);
     }
 
-    public <T> T saveBankExistsStaffBankAccounts(Class<T> type, Object... args) {
-        return db.queryForObject("SELECT EXISTS(SELECT 1 FROM staff_bank_accounts WHERE staff_id=? AND status<>'INACTIVE')", type, args);
+    public void relinkBank(long id, long staff, String holder) {
+        db.update("UPDATE staff_bank_accounts SET status='PENDING',account_holder=?,unlinked_at=NULL,verified_by=NULL,verified_at=NULL,verification_note=NULL,verification_provider='MANUAL' WHERE id=? AND staff_id=?", holder, id, staff);
     }
 
-    public long saveBankInsertStaffBankAccounts(Object... args) {
-        return insert("INSERT INTO staff_bank_accounts(staff_id,bank_code,account_number,account_holder,is_default) VALUES (?,?,?,?,?)", args);
+    public List<Map<String,Object>> ownedBank(long staff, long id) {
+        return db.queryForList("SELECT status,unlinked_at FROM staff_bank_accounts WHERE staff_id=? AND id=?", staff, id);
+    }
+
+    public void clearDefaultBank(long staff) {
+        db.update("UPDATE staff_bank_accounts SET is_default=false WHERE staff_id=? AND is_default", staff);
+    }
+
+    public void setDefaultBank(long staff, long id) {
+        db.update("UPDATE staff_bank_accounts SET is_default=true WHERE staff_id=? AND id=? AND status='VERIFIED'", staff, id);
+    }
+
+    public void ensureDefaultBank(long staff) {
+        db.update("""
+            UPDATE staff_bank_accounts SET is_default=true
+            WHERE id=(SELECT id FROM staff_bank_accounts WHERE staff_id=? AND status='VERIFIED' ORDER BY id LIMIT 1)
+              AND NOT EXISTS (SELECT 1 FROM staff_bank_accounts WHERE staff_id=? AND is_default)
+            """, staff, staff);
+    }
+
+    public boolean hasOpenBankWithdrawal(long staff, long id) {
+        return Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM withdrawals WHERE staff_id=? AND bank_account_id=? AND status IN ('PENDING','APPROVED','PROCESSING'))", Boolean.class, staff, id));
+    }
+
+    public void unlinkBank(long staff, long id) {
+        db.update("UPDATE staff_bank_accounts SET status='INACTIVE', is_default=false, unlinked_at=now() WHERE staff_id=? AND id=?", staff, id);
     }
 
     public List<Map<String, Object>> withdrawFindWithdrawals(Object... args) {
@@ -82,7 +106,7 @@ public class FinanceOperationsSqlRepository {
     }
 
     public List<Map<String, Object>> adminBanksFindStaffBankAccounts(Object... args) {
-        return db.queryForList("SELECT id,staff_id AS \"staffId\",bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",status,verification_provider AS \"verificationProvider\",verified_at AS \"verifiedAt\",verified_by AS \"verifiedBy\",(SELECT r.admin_name FROM bank_account_reviews r WHERE r.bank_account_id=staff_bank_accounts.id ORDER BY r.id DESC LIMIT 1) AS \"verifiedByName\",verification_note AS \"verificationNote\" FROM staff_bank_accounts ORDER BY id DESC", args);
+        return db.queryForList("SELECT id,staff_id AS \"staffId\",bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",status,is_default AS \"isDefault\",unlinked_at AS \"unlinkedAt\",verification_provider AS \"verificationProvider\",verified_at AS \"verifiedAt\",verified_by AS \"verifiedBy\",(SELECT r.admin_name FROM bank_account_reviews r WHERE r.bank_account_id=staff_bank_accounts.id ORDER BY r.id DESC LIMIT 1) AS \"verifiedByName\",verification_note AS \"verificationNote\" FROM staff_bank_accounts ORDER BY id DESC", args);
     }
 
     public boolean withdrawalHasPayout(long id){return Boolean.TRUE.equals(db.queryForObject("SELECT EXISTS(SELECT 1 FROM withdrawal_payouts WHERE withdrawal_id=?)",Boolean.class,id));}
@@ -90,6 +114,7 @@ public class FinanceOperationsSqlRepository {
     public int cancelPendingWithdrawal(long id,long staff){return db.update("UPDATE withdrawals SET status='CANCELLED',cancelled_by=?,cancelled_at=now(),cancellation_reason='Nhân viên hủy yêu cầu trước khi gửi lệnh chuyển tiền.' WHERE id=? AND staff_id=? AND (status='PENDING' OR (status='APPROVED' AND automatic_requested=true)) AND NOT EXISTS(SELECT 1 FROM withdrawal_payouts p WHERE p.withdrawal_id=withdrawals.id)",staff,id,staff);}
 
     public List<Map<String,Object>> bankForReview(long id){return db.queryForList("SELECT * FROM staff_bank_accounts WHERE id=? FOR UPDATE",id);}
+    public List<Long> bankOwners(long id){return db.queryForList("SELECT staff_id FROM staff_bank_accounts WHERE id=?",Long.class,id);}
     public List<Map<String,Object>> bankReviewHistory(long id){return db.queryForList("SELECT id,admin_id AS \"adminId\",admin_name AS \"adminName\",old_status AS \"oldStatus\",new_status AS \"newStatus\",bank_code AS \"bankCode\",account_number AS \"accountNumber\",account_holder AS \"accountHolder\",verification_note AS \"verificationNote\",legacy,reviewed_at AS \"reviewedAt\" FROM bank_account_reviews WHERE bank_account_id=? UNION ALL SELECT -v.id,NULL,p.provider || ' (tự động)',NULL,'VERIFIED',p.bank_code,p.account_number,p.account_holder,'Tên người nhận được tra cứu qua API ' || p.provider || '.',false,v.verified_at FROM bank_provider_verifications v JOIN bank_lookup_proofs p ON p.id=v.proof_id WHERE v.bank_account_id=? ORDER BY \"reviewedAt\" DESC,id DESC",id,id);}
     public long insertBankReview(Map<String,Object> bank,long admin,String adminName,String status,String note){
         return insert("INSERT INTO bank_account_reviews(bank_account_id,staff_id,admin_id,admin_name,old_status,new_status,bank_code,account_number,account_holder,verification_note) VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -97,7 +122,7 @@ public class FinanceOperationsSqlRepository {
     }
 
     public int verifyBankUpdateStaffBankAccounts(Object... args) {
-        return db.update("UPDATE staff_bank_accounts SET status=?,verification_note=?,verified_by=?,verified_at=now(),verification_provider='MANUAL' WHERE id=?", args);
+        return db.update("UPDATE staff_bank_accounts SET status=?,verification_note=?,verified_by=?,verified_at=now(),verification_provider='MANUAL',is_default=(is_default AND ?='VERIFIED') WHERE id=?", args);
     }
 
     public List<Map<String, Object>> withdrawalsFindWithdrawals(Object... args) {

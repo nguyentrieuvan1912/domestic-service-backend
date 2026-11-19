@@ -57,6 +57,13 @@ Neither a profile name nor a successful bank-form save counts as a bank lookup.
 
 GET admin/staff withdrawals adds payoutStatus and payoutMessage. Admin rows still contain the saved bankAccount JSON snapshot.
 
+### Staff bank account management (V18)
+
+- `GET /staff/me/bank-accounts` lists linked accounts and returns the saved `isDefault` flag. Only verified accounts can be default.
+- `PUT /staff/me/bank-accounts/{id}/default` makes an owned verified account the default and returns the updated list.
+- `DELETE /staff/me/bank-accounts/{id}` unlinks an owned account and returns the updated list. Accounts used by an open withdrawal return HTTP 409. Withdrawal history retains its original beneficiary snapshot.
+- The oldest remaining verified account becomes default when the previous default is unlinked. The existing `POST /staff/me/bank-accounts` flow rechecks verification when relinking and also returns the updated list as `accounts`.
+
 ## Financial transitions
 
 Existing withdrawal creation atomically moves AVAILABLE to RESERVED and remains PENDING until admin approval.

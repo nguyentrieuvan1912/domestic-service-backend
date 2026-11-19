@@ -54,8 +54,20 @@ class CustomerWalletPostgresTests {
                     response=Map.of("id",Long.parseLong(token),"role","CUSTOMER");
                 } else if(exchange.getRequestURI().getPath().contains("/bookings/")) {
                     String[] parts=exchange.getRequestURI().getPath().split("/");
-                    long id=Long.parseLong(parts[parts.length-1].equals("reconcile-payment")?parts[parts.length-2]:parts[parts.length-1]);
+                    boolean methodChange=parts[parts.length-1].equals("payment-method");
+                    long id=Long.parseLong(methodChange || parts[parts.length-1].equals("reconcile-payment")?parts[parts.length-2]:parts[parts.length-1]);
                     response=books.get(id);
+                    if(methodChange) {
+                        var body=json.readValue(exchange.getRequestBody().readAllBytes(),new TypeReference<Map<String,Object>>(){});
+                        response.put("paymentMethod",body.get("method"));
+                    }
+                } else if(exchange.getRequestURI().getPath().endsWith("/cancel")) {
+                    String[] parts=exchange.getRequestURI().getPath().split("/");
+                    long id=Long.parseLong(parts[parts.length-2]);
+                    var proof=new LinkedHashMap<>(proofs.get(id));
+                    if (((Number)proof.get("amountPaid")).longValue()==0) proof.put("status","CANCELLED");
+                    proofs.put(id,proof);
+                    response=Map.of("code","00","data",proof,"signature",client.sign(proof));
                 } else if(exchange.getRequestMethod().equals("POST")) {
                     var body=json.readValue(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8),new TypeReference<Map<String,Object>>(){});
                     long id=((Number)body.get("orderCode")).longValue(),amount=((Number)body.get("amount")).longValue();
@@ -179,6 +191,42 @@ class CustomerWalletPostgresTests {
     @Test void walletOwnershipAndInternalKeyAreEnforced(){
         peer.books.put(staff,book("WALLET"));assertThrows(ResponseStatusException.class,()->wallet.pay("Bearer "+(staff+1),staff));
         assertThrows(ResponseStatusException.class,()->wallet.authorize("wrong"));wallet.authorize("test-internal");
+    }
+    long bookingQr() {
+        var intent=(Map<?,?>)wallet.pay(token(),staff,"BANK_TRANSFER_QR").get("topup");
+        return ((Number)intent.get("id")).longValue();
+    }
+    @Test void expiredQrIsReplacedAndLateMoneyFromOldQrOnlyCreditsWallet() {
+        peer.books.put(staff,book("BANK_TRANSFER_QR"));
+        long first=bookingQr();
+        assertEquals(first,bookingQr());
+        db.update("UPDATE customer_topups SET expires_at=now()-interval '1 second' WHERE id=?",first);
+        long replacement=bookingQr();
+        assertNotEquals(first,replacement);
+        assertEquals(replacement,bookingQr());
+        assertEquals("CANCELLED",peer.proofs.get(first).get("status"));
+        peer.paid(first,10000);
+        service.refresh(token(),first,false);
+        assertEquals(10000,balance());
+        assertEquals(0L,wallet.status(staff).get("paidAmount"));
+    }
+    @Test void switchingMethodClosesTheQrAndRejectsStaleQrPayCalls() {
+        peer.books.put(staff,book("BANK_TRANSFER_QR"));
+        long first=bookingQr();
+        assertEquals("WALLET",wallet.changeMethod(token(),staff,"WALLET").get("paymentMethod"));
+        assertEquals("CANCELLED",peer.proofs.get(first).get("status"));
+        assertNull(wallet.bookingQr(token(),staff).get("topup"));
+        assertThrows(ResponseStatusException.class,this::bookingQr);
+        assertEquals("BANK_TRANSFER_QR",wallet.changeMethod(token(),staff,"BANK_TRANSFER_QR").get("paymentMethod"));
+        assertNotEquals(first,bookingQr());
+    }
+    @Test void switchingChecksPartialMoneyAtTheProviderBeforeClosing() {
+        peer.books.put(staff,book("BANK_TRANSFER_QR"));
+        long id=bookingQr();
+        peer.paid(id,5000);
+        assertThrows(ResponseStatusException.class,()->wallet.changeMethod(token(),staff,"CASH"));
+        assertEquals("BANK_TRANSFER_QR",peer.books.get(staff).get("paymentMethod"));
+        assertEquals("REVIEW",((Map<?,?>)wallet.bookingQr(token(),staff).get("topup")).get("status"));
     }
     @Test void walletReadsPersistedBalanceAndOnlyTheLoggedInCustomersLedger(){
         long id=create();peer.paid(id,10000);service.refresh(token(),id,false);

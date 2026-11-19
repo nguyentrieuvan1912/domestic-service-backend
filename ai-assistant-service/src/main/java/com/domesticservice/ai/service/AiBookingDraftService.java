@@ -48,27 +48,30 @@ public class AiBookingDraftService {
     public Map<String, Object> get(String token, long conversation, Long draftId) {
         long customer = actor(token);
         requireOwner(conversation, customer, false);
-        var open = openDrafts(conversation, customer);
-        var draft = draftId == null ? open.stream().findFirst().orElse(null) : open.stream()
-            .filter(candidate -> draftId.equals(candidate.getId())).findFirst()
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Đơn nháp không tồn tại hoặc đã hết hạn."));
+        var draft = current(conversation, customer);
+        if (draftId != null && (draft == null || !draftId.equals(draft.getId()))) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Đơn nháp không tồn tại hoặc đã hết hạn.");
+        }
         var data = data(draft);
         var choices = choices(data, token);
         return response(draft, data, missing(data, choices), choices);
     }
 
-    private record Panel(Long expandedDraftId, List<BookingDraft> drafts) {}
+    private record Panel(Long expandedDraftId, BookingDraft draft, boolean switchPending) {}
 
     public Map<String, Object> list(String token, long conversation) {
         long customer = actor(token);
         var panel = transactions.execute(status -> {
             requireOwner(conversation, customer, true);
-            return new Panel(conversations.expandedDraftId(conversation), openDrafts(conversation, customer));
+            var draft = current(conversation, customer);
+            var proposal = pendingSwitch(conversation);
+            return new Panel(conversations.expandedDraftId(conversation), draft, draft != null && proposal != null
+                && Objects.equals(draft.getId(), proposal.draftId()) && Objects.equals(draft.getVersion(), proposal.version()));
         });
         var cards = new ArrayList<Map<String, Object>>();
-        for (var draft : panel.drafts()) {
-            var data = data(draft);
-            if (!data.containsKey("serviceId")) continue;
+        var draft = panel.draft();
+        var data = data(draft);
+        if (data.containsKey("serviceId")) {
             Choices choices;
             try {
                 choices = catalogChoices(data, List.of());
@@ -82,6 +85,7 @@ public class AiBookingDraftService {
         result.put("drafts", cards);
         result.put("expandedDraftId", cards.stream().anyMatch(card -> Objects.equals(card.get("id"), panel.expandedDraftId()))
             ? panel.expandedDraftId() : null);
+        result.put("switchPending", panel.switchPending());
         return result;
     }
 
@@ -97,27 +101,29 @@ public class AiBookingDraftService {
         return new Patch(draft == null ? null : draft.getId(), draft == null ? null : draft.getVersion(), data(draft));
     }
 
-    record Prepared(Patch patch, Long targetId, Long targetVersion, Map<String, Object> data,
+    record Prepared(Patch patch, boolean replacesService, Map<String, Object> data,
                     List<String> missing, Choices choices) {}
 
     Prepared prepare(String token, long conversation, long customer, Patch patch, boolean fromChat) {
         if (patch.changes() == null || patch.changes().isEmpty() || !FIELDS.containsAll(patch.changes().keySet())) {
             throw bad("Trường chỉnh sửa bản nháp không hợp lệ.");
         }
-        var open = openDrafts(conversation, customer);
-        var before = open.stream().findFirst().orElse(null);
+        var before = current(conversation, customer);
         requireVersion(before, patch);
         var beforeData = data(before);
-        var target = before;
         Object requestedService = patch.changes().get("serviceId");
-        if (requestedService != null && !sameService(beforeData.get("serviceId"), requestedService)) {
-            long serviceId = positive(requestedService, "serviceId");
-            target = open.stream().filter(candidate -> sameService(data(candidate).get("serviceId"), serviceId))
-                .findFirst().orElse(beforeData.containsKey("serviceId") ? null : before);
+        boolean serviceChanged = patch.changes().containsKey("serviceId")
+            && !sameService(beforeData.get("serviceId"), requestedService);
+        boolean replacesService = serviceChanged && beforeData.containsKey("serviceId");
+        if (replacesService && requestedService == null) {
+            throw bad("Hãy chọn dịch vụ mới để thay thế dịch vụ hiện tại.");
         }
-        var data = data(target);
+        if (replacesService && !fromChat && !patch.confirmServiceSwitch()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Hãy xác nhận đổi dịch vụ trước khi bỏ đơn nháp cũ.");
+        }
+        var data = replacesService ? new LinkedHashMap<String, Object>() : beforeData;
         Object previousQuantity = data.get("quantity");
-        if (patch.changes().containsKey("serviceId") && !sameService(data.get("serviceId"), requestedService)) {
+        if (serviceChanged) {
             for (var dependent : List.of("packageId", "addOnIds", "answers", "promotionCode",
                 "quantity", "requiredStaffCount")) data.remove(dependent);
             if (fromChat) {
@@ -147,8 +153,29 @@ public class AiBookingDraftService {
         var choices = choices(data, token);
         if (fromChat) applyChatDefaults(data, choices, patch, previousQuantity);
         validateChoices(data, choices);
-        return new Prepared(patch, target == null ? null : target.getId(), target == null ? null : target.getVersion(),
-            data, missing(data, choices), choices);
+        return new Prepared(patch, replacesService, data, missing(data, choices), choices);
+    }
+
+    Patch pendingSwitch(long conversation) {
+        String pending = conversations.pendingDraftSwitch(conversation);
+        return pending == null ? null : json.readValue(pending, Patch.class);
+    }
+
+    void setPendingSwitch(long conversation, long customer, Patch patch) {
+        if (patch != null) requireVersion(current(conversation, customer), patch);
+        conversations.setPendingDraftSwitch(conversation, patch == null ? null : json.writeValueAsString(patch));
+    }
+
+    String switchPrompt(Patch snapshot, Prepared target) {
+        String currentName = "dịch vụ hiện tại";
+        try {
+            currentName = Objects.toString(catalogChoices(snapshot.changes(), List.of()).service().get("name"), currentName);
+        } catch (ResponseStatusException failure) {
+            if (failure.getStatusCode().value() != 404) throw failure;
+        }
+        String newName = Objects.toString(target.choices().service().get("name"), "dịch vụ mới");
+        return "Bạn đang đặt **" + currentName + "**. Bạn có muốn chuyển sang **" + newName
+            + "** không? Nếu đồng ý, đơn nháp **" + currentName + "** sẽ được bỏ.";
     }
 
     Map<String, Object> save(long conversation, long customer, Prepared prepared) {
@@ -156,13 +183,17 @@ public class AiBookingDraftService {
         if (!Boolean.TRUE.equals(conversations.sendExistsAiConversations(Boolean.class, conversation))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Hội thoại đã kết thúc.");
         }
-        var open = openDrafts(conversation, customer);
-        requireVersion(open.stream().findFirst().orElse(null), prepared.patch());
-        var draft = prepared.targetId() == null ? null : open.stream()
-            .filter(candidate -> prepared.targetId().equals(candidate.getId())).findFirst().orElse(null);
-        requireVersion(draft, prepared.targetId(), prepared.targetVersion());
+        var draft = current(conversation, customer);
+        requireVersion(draft, prepared.patch());
         Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        if (prepared.replacesService()) {
+            draft.setStatus("CANCELLED");
+            draft.setUpdatedAt(now);
+            drafts.saveAndFlush(draft);
+            draft = null;
+        }
         if (draft == null) {
+            drafts.expireDraft(conversation, now);
             draft = new BookingDraft();
             draft.setConversationId(conversation);
             draft.setCustomerId(customer);
@@ -175,6 +206,7 @@ public class AiBookingDraftService {
         draft.setMissingSlots(json.writeValueAsString(prepared.missing()));
         var saved = drafts.saveAndFlush(draft);
         conversations.setExpandedDraft(conversation, prepared.data().containsKey("serviceId") ? saved.getId() : null);
+        setPendingSwitch(conversation, customer, null);
         return response(saved, prepared.data(), prepared.missing(), prepared.choices());
     }
 
@@ -251,7 +283,11 @@ public class AiBookingDraftService {
             .ifPresent(pack -> data.put("packageId", pack.get("id")));
     }
 
-    public record Patch(Long draftId, Long version, Map<String, Object> changes) {}
+    public record Patch(Long draftId, Long version, Map<String, Object> changes, boolean confirmServiceSwitch) {
+        public Patch(Long draftId, Long version, Map<String, Object> changes) {
+            this(draftId, version, changes, false);
+        }
+    }
 
     private long actor(String token) {
         return ServiceHttpClient.userId(identity.authenticate(token, "CUSTOMER"));
@@ -264,12 +300,8 @@ public class AiBookingDraftService {
     }
 
     private BookingDraft current(long conversation, long customer) {
-        return openDrafts(conversation, customer).stream().findFirst().orElse(null);
-    }
-
-    private List<BookingDraft> openDrafts(long conversation, long customer) {
-        return drafts.findByConversationIdAndCustomerIdAndStatusAndExpiresAtAfterOrderByUpdatedAtDescIdDesc(
-            conversation, customer, "COLLECTING", Instant.now());
+        return drafts.findByConversationIdAndCustomerIdAndStatusAndExpiresAtAfter(
+            conversation, customer, "COLLECTING", Instant.now()).orElse(null);
     }
 
     private static boolean sameService(Object first, Object second) {

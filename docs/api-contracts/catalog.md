@@ -1,7 +1,7 @@
 # Catalog API contract — read API v1
 
 Owner: Người 1. Consumer: Web/Mobile, Booking/AI (người 2).
-Chỉ các GET dưới đây đã triển khai; quote/Admin CRUD/promotion chưa triển khai.
+Tài liệu này mô tả API đọc danh mục và quản lý hình ảnh. Xem [Operations V5](operations-v5.md) cho các luồng quote, CRUD và ưu đãi.
 
 ## Public endpoints đã có
 
@@ -10,6 +10,8 @@ Chỉ các GET dưới đây đã triển khai; quote/Admin CRUD/promotion chưa
 | GET /api/v1/catalog/categories | Array Category, chỉ ACTIVE, order name/id |
 | GET /api/v1/catalog/services | Page; chỉ service ACTIVE thuộc category ACTIVE |
 | GET /api/v1/catalog/services/{id} | Detail; không có hoặc INACTIVE trả 404 |
+| GET /api/v1/catalog/home-banners | Banner đang bật, liên kết dịch vụ và danh mục đang hoạt động, sắp theo sortOrder và ID |
+| GET /api/v1/catalog/images/{id} | JPEG có URL cố định theo nội dung, trả 404 nếu không tồn tại |
 
 GET services: `q` tối đa 100 ký tự, trim, không phân biệt hoa/thường, tìm theo name/code/description.
 Không bỏ dấu tiếng Việt. `%`, `_`, `!` là ký tự thường, không phải wildcard.
@@ -45,6 +47,19 @@ ONE_OFF_STANDARD, RECURRING_STANDARD, DEEP_CLEANING_STANDARD. Seed insert-only, 
 dịch vụ đã chỉnh sửa. Đây là dữ liệu mẫu local, không phải giá/chính sách production.
 
 ## Tích hợp frontend / cấu hình chung
+
+### Hình ảnh dịch vụ và banner
+
+- Snapshot admin trả thêm `services[].imageUrl`. Dùng URL của Catalog cho thumb và ảnh bìa.
+  URL bắt đầu bằng `/api/v1/catalog/` được ghép với địa chỉ Gateway của từng ứng dụng. URL HTTPS cũ vẫn được giữ.
+- `PUT /api/v1/catalog/admin/services/{id}/image` nhận `{imageData}` và trả `{imageUrl}`.
+  Admin web nhận JPG, PNG, WebP, xem trước ảnh cắt giữa và gửi JPEG data URL 1200 × 675 px.
+- `GET|POST /api/v1/catalog/admin/home-banners` và `PUT /api/v1/catalog/admin/home-banners/{id}` yêu cầu quyền ADMIN.
+  Dữ liệu gồm `serviceId,title,badge,description,buttonLabel,theme,layout,sortOrder,active`.
+  GET trả thêm `id,imageUrl`; POST/PUT nhận `imageData` khi tạo banner hoặc thay ảnh/bố cục, và trả `{id}`.
+- Bố cục `SPLIT` dùng ảnh bên phải 660 × 768 px. Bố cục `FULL_IMAGE` dùng ảnh phủ thẻ 1200 × 500 px.
+  JPEG sau xử lý tối đa 1,5 MiB. Catalog lưu ảnh và tham chiếu trong cùng giao dịch.
+  Ảnh cũ vẫn đọc được qua URL đã lưu trong snapshot đơn hàng.
 
 - Repo Web giữ riêng: `.env.example` với `VITE_API_BASE_URL=http://localhost:8080`,
   dev port 5174, strictPort (không tự nhảy sang origin chưa cấu hình).
