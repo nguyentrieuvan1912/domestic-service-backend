@@ -4,7 +4,9 @@ BEGIN
     FOR col IN SELECT table_name, is_identity FROM information_schema.columns
         WHERE table_schema='public' AND column_name='id'
           -- partner_captchas.id is an opaque one-use challenge token, not an entity ID.
-          AND table_name NOT IN ('service_schema_metadata','flyway_schema_history','partner_captchas')
+          -- staff_discipline_policy uses the fixed key 1 for its singleton configuration row.
+          AND table_name NOT IN ('service_schema_metadata','flyway_schema_history','partner_captchas',
+                                 'staff_discipline_policy')
     LOOP
         IF col.table_name IN ('admins','customers','staffs') THEN
             IF col.is_identity='YES' THEN RAISE EXCEPTION 'Inherited profile must share users.id'; END IF;
