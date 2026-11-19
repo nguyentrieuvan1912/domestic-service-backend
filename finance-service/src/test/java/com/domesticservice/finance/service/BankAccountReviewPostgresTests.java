@@ -26,7 +26,12 @@ class BankAccountReviewPostgresTests {
  static class Config {
   @Bean PayoutProperties limits(){return new PayoutProperties(false,"","","","","","",2000,1000000);}
   @Bean(destroyMethod="stop") IdentityPeer peer(ObjectMapper json)throws Exception{return new IdentityPeer(json);}
-  @Bean PayoutBankDirectory directory(PayoutProperties limits,ObjectMapper json){return new PayoutBankDirectory(limits,json);}
+  @Bean CustomerWalletService customerWallet(){return org.mockito.Mockito.mock(CustomerWalletService.class);}
+  @Bean PayoutBankDirectory directory(PayoutProperties limits,ObjectMapper json){
+   return new PayoutBankDirectory(limits,json){
+    @Override public List<Map<String,Object>> banks(){return List.of(Map.of("bin","970422","name","Test bank"));}
+   };
+  }
   @Bean FinanceOperationsService ops(FinanceOperationsSqlRepository repo,ObjectMapper json,IdentityPeer peer,PayoutBankDirectory directory,PayoutProperties limits){return new FinanceOperationsService(repo,json,peer.url(),peer.url(),directory,limits);}
  }
  static class IdentityPeer {
@@ -44,9 +49,9 @@ class BankAccountReviewPostgresTests {
   void stop(){server.stop(0);}
  }
  @Autowired FinanceOperationsService ops;@Autowired JdbcTemplate db;@Autowired IdentityPeer peer;
- long bank;
+ long bank, staff;
  final String note="Đối chiếu tên và số tài khoản trên ứng dụng ngân hàng";
- @BeforeEach void setup(){peer.adminName="Admin xét duyệt";long staff=ThreadLocalRandom.current().nextLong(100000000,200000000);bank=db.queryForObject("INSERT INTO staff_bank_accounts(staff_id,bank_code,account_number,account_holder) VALUES (?,'970422','123456789','NGUYEN VAN A') RETURNING id",Long.class,staff);}
+ @BeforeEach void setup(){peer.adminName="Admin xét duyệt";staff=ThreadLocalRandom.current().nextLong(100000000,200000000);bank=db.queryForObject("INSERT INTO staff_bank_accounts(staff_id,bank_code,account_number,account_holder) VALUES (?,'970422','123456789','NGUYEN VAN A') RETURNING id",Long.class,staff);}
  void approve(){ops.verifyBank("Bearer admin",bank,Map.of("status","VERIFIED","verificationNote",note));}
  @Test void approvalRecordsAuthenticatedActorAndAccountSnapshot(){
   ops.verifyBank("Bearer admin",bank,Map.of("status","VERIFIED","verificationNote",note,"adminId",999));
@@ -64,4 +69,44 @@ class BankAccountReviewPostgresTests {
  @Test void failureToSaveAuditCannotVerifyAccount(){peer.adminName="x".repeat(161);assertThrows(Exception.class,this::approve);assertEquals("PENDING",db.queryForObject("SELECT status FROM staff_bank_accounts WHERE id=?",String.class,bank));assertTrue(ops.bankHistory("Bearer admin",bank).isEmpty());}
  @Test void staffCannotReadOrChangeBankVerification(){assertThrows(ResponseStatusException.class,()->ops.bankHistory("Bearer staff",bank));assertThrows(ResponseStatusException.class,()->ops.verifyBank("Bearer staff",bank,Map.of("status","VERIFIED","verificationNote",note)));assertEquals("PENDING",db.queryForObject("SELECT status FROM staff_bank_accounts WHERE id=?",String.class,bank));}
  @Test void concurrentIdenticalApprovalWritesOneAudit()throws Exception {try(var pool=Executors.newFixedThreadPool(2)){var a=pool.submit(this::approve);var b=pool.submit(this::approve);a.get();b.get();}assertEquals(1,ops.bankHistory("Bearer admin",bank).size());}
+
+ String staffToken() { return "Bearer staff" + staff; }
+ long secondBank() {
+  return db.queryForObject("INSERT INTO staff_bank_accounts(staff_id,bank_code,account_number,account_holder,status) VALUES (?,'970423','456789123','NGUYEN VAN A','VERIFIED') RETURNING id",Long.class,staff);
+ }
+ @Test void staffCanSelectOneVerifiedDefaultAndUnlinkIt() {
+  assertThrows(ResponseStatusException.class,()->ops.setDefaultBank(staffToken(),bank));
+  approve();
+  long other=secondBank();
+  assertThrows(ResponseStatusException.class,()->ops.setDefaultBank("Bearer staff",other));
+  assertThrows(ResponseStatusException.class,()->ops.unlinkBank("Bearer staff",other));
+  var changed=ops.setDefaultBank(staffToken(),other);
+  assertEquals(other,changed.getFirst().get("id"));
+  assertEquals(true,changed.getFirst().get("isDefault"));
+  assertEquals(false,changed.get(1).get("isDefault"));
+  var remaining=ops.unlinkBank(staffToken(),other);
+  assertEquals(1,remaining.size());
+  assertEquals(bank,remaining.getFirst().get("id"));
+  assertEquals(true,remaining.getFirst().get("isDefault"));
+  assertEquals(remaining,ops.unlinkBank(staffToken(),other));
+  assertNotNull(db.queryForObject("SELECT unlinked_at FROM staff_bank_accounts WHERE id=?",Object.class,other));
+ }
+ @Test void bankWithOpenWithdrawalCannotBeUnlinked() {
+  approve();
+  db.update("UPDATE staff_balances SET available_balance=10000 WHERE staff_id=?",staff);
+  ops.withdraw(staffToken(),Map.of("amount",2000,"bankAccountId",bank,"requestKey","bank-link-test"));
+  assertThrows(ResponseStatusException.class,()->ops.unlinkBank(staffToken(),bank));
+  assertEquals("VERIFIED",ops.banks(staffToken()).getFirst().get("status"));
+ }
+ @Test void relinkingOwnAccountRequiresFreshVerification() {
+  approve();
+  ops.unlinkBank(staffToken(),bank);
+  assertThrows(ResponseStatusException.class,this::approve);
+  var relinked=ops.saveBank(staffToken(),Map.of("bankCode","970422","accountNumber","123456789","accountHolder","NGUYEN VAN A"));
+  assertEquals(bank,relinked.get("id"));
+  assertEquals("PENDING",relinked.get("status"));
+  assertEquals(false,ops.banks(staffToken()).getFirst().get("isDefault"));
+  approve();
+  assertEquals(true,ops.banks(staffToken()).getFirst().get("isDefault"));
+ }
 }

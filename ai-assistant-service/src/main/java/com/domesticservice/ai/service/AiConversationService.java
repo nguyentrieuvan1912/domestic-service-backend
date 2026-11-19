@@ -6,6 +6,9 @@ import java.util.regex.Pattern;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,6 +24,19 @@ public class AiConversationService {
         "(?imsu)^\\h*(?:\\*\\*)?Hướng dẫn tham khảo(?:\\*\\*)?\\h*:.*\\z");
     private static final Pattern TOOL_INSTRUCTIONS = Pattern.compile(
         "(?iu)(?<![^.!?\\r\\n])[^.!?\\r\\n]*\\b(?:gọi|dùng|sử dụng)\\h+công cụ\\h*[\\[`]?[a-z]+(?:_[a-z]+)+[^.!?\\r\\n]*(?:[.!?]|$)");
+    private static final Pattern CURRENT_TIME = Pattern.compile(
+        "^(?:cho (?:toi|minh|em) hoi )?(?:(?:bay gio|hien tai)(?: la)? )?"
+            + "(?:may gio|bao nhieu gio)(?: roi)?(?: o viet nam)?(?: roi| vay| a| the| nhi)?$");
+    private static final Pattern CURRENT_DATE = Pattern.compile(
+        "^(?:cho (?:toi|minh|em) hoi )?(?:hom nay|bay gio|hien tai)(?: la)? "
+            + "(?:ngay (?:may|bao nhieu)|thu may)(?: o viet nam)?(?: roi| vay| a| the| nhi)?$");
+    private static final Pattern ACCEPT_SWITCH = Pattern.compile(
+        "^(?:co|ok|duoc|dong y|doi di|doi dich vu|doi sang dich vu moi|xac nhan doi dich vu)(?: a| nhe| nha)?$");
+    private static final Pattern DECLINE_SWITCH = Pattern.compile(
+        "^(?:khong|ko|khong doi|khong can doi|khong doi dich vu|giu don cu|giu don nhap cu|giu dich vu hien tai)(?: a| nhe| nha)?$");
+    private static final ZoneId CUSTOMER_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
+    private static final DateTimeFormatter VIETNAM_DATE = DateTimeFormatter.ofPattern("EEEE, dd/MM/yyyy", Locale.forLanguageTag("vi-VN"));
+    private static final DateTimeFormatter HOURS = DateTimeFormatter.ofPattern("HH:mm");
 
     private final AiConversationSqlRepository repository;
 
@@ -64,7 +80,8 @@ public class AiConversationService {
         return customerMessages(repository.messagesFindAiMessages(id));
     }
 
-    private record Turn(Long responseId, List<Map<String, Object>> context, AiBookingDraftService.Patch draft) {}
+    private record Turn(Long responseId, List<Map<String, Object>> context, AiBookingDraftService.Patch draft,
+                        AiBookingDraftService.Patch proposedSwitch) {}
 
     public Map<String, Object> send(String token, long id, Map<String, Object> body) {
         long user = actor(token);
@@ -78,8 +95,12 @@ public class AiConversationService {
         if (turn.responseId() != null) return sentTurn(id, key, turn.responseId());
 
         try {
-            var reply = provider.reply(turn.context(), token);
-            var draftReply = prepareDraftReply(token, user, id, turn.draft(), reply);
+            String normalized = AiBusinessTools.catalogWords(text);
+            var switchReply = resolveSwitch(token, user, id, turn, normalized);
+            String currentTime = currentTime(normalized);
+            var reply = switchReply != null ? new AiProvider.Reply(switchReply.text(), List.of())
+                : currentTime != null ? new AiProvider.Reply(currentTime, List.of()) : provider.reply(turn.context(), token);
+            var draftReply = switchReply != null ? switchReply : prepareDraftReply(token, user, id, turn.draft(), reply);
             return transactions.execute(status -> {
                 owned(user, id, true);
                 requireActive(id);
@@ -88,6 +109,9 @@ public class AiConversationService {
                 }
                 long userMessage = repository.sendFindAiMessages3(Long.class, id, text, key);
                 var savedDraft = draftReply.prepared() == null ? null : drafts.save(id, user, draftReply.prepared());
+                if (draftReply.proposedSwitch() != null || (draftReply.resolvesSwitch() && savedDraft == null)) {
+                    drafts.setPendingSwitch(id, user, draftReply.proposedSwitch());
+                }
                 if (savedDraft == null) repository.setExpandedDraft(id, null);
                 long replyId = repository.sendFindAiMessages4(Long.class, id, draftReply.text());
                 if (!reply.suggestions().isEmpty()) repository.saveSuggestions(replyId, reply.suggestions());
@@ -115,7 +139,47 @@ public class AiConversationService {
         }
     }
 
-    private record DraftReply(String text, AiBookingDraftService.Prepared prepared, AiProvider.ToolReceipt receipt) {}
+    private record DraftReply(String text, AiBookingDraftService.Prepared prepared, AiProvider.ToolReceipt receipt,
+                              AiBookingDraftService.Patch proposedSwitch, boolean resolvesSwitch) {
+        DraftReply(String text, AiBookingDraftService.Prepared prepared, AiProvider.ToolReceipt receipt) {
+            this(text, prepared, receipt, null, false);
+        }
+    }
+
+    private static String currentTime(String normalized) {
+        boolean asksTime = CURRENT_TIME.matcher(normalized).matches();
+        if (!asksTime && !CURRENT_DATE.matcher(normalized).matches()) return null;
+        var now = ZonedDateTime.now(CUSTOMER_ZONE);
+        return asksTime ? "Bây giờ là **" + HOURS.format(now) + "** theo giờ Việt Nam (UTC+7)."
+            : "Hôm nay là **" + VIETNAM_DATE.format(now) + "** theo giờ Việt Nam.";
+    }
+
+    private DraftReply resolveSwitch(String token, long user, long id, Turn turn, String normalized) {
+        var proposal = turn.proposedSwitch();
+        if (proposal == null) {
+            return Set.of("xac nhan doi dich vu", "giu dich vu hien tai").contains(normalized)
+                ? new DraftReply("Hiện không có yêu cầu đổi dịch vụ nào đang chờ xác nhận.", null, null) : null;
+        }
+        if (DECLINE_SWITCH.matcher(normalized).matches()) {
+            return new DraftReply("Mình giữ đơn nháp hiện tại.", null, null, null, true);
+        }
+        if (!ACCEPT_SWITCH.matcher(normalized).matches()) return null;
+        if (!Objects.equals(proposal.draftId(), turn.draft().draftId())
+            || !Objects.equals(proposal.version(), turn.draft().version())) {
+            return new DraftReply("Đề nghị đổi dịch vụ đã hết hiệu lực. Bạn chọn lại dịch vụ muốn đặt nhé.",
+                null, null, null, true);
+        }
+        long started = System.nanoTime();
+        try {
+            var prepared = drafts.prepare(token, id, user, proposal, true);
+            return new DraftReply(drafts.progress(prepared), prepared, draftReceipt("SUCCEEDED", 200, started), null, true);
+        } catch (ResponseStatusException failure) {
+            int code = failure.getStatusCode().value();
+            if (code != 400 && code != 404 && code != 409) throw failure;
+            return new DraftReply("Mình chưa chuyển được dịch vụ. " + failure.getReason(), null,
+                draftReceipt("FAILED", code, started), null, true);
+        }
+    }
 
     private DraftReply prepareDraftReply(String token, long user, long id, AiBookingDraftService.Patch snapshot,
                                          AiProvider.Reply reply) {
@@ -133,6 +197,9 @@ public class AiConversationService {
         var patch = new AiBookingDraftService.Patch(snapshot.draftId(), snapshot.version(), reply.draftChanges());
         try {
             var prepared = drafts.prepare(token, id, user, patch, true);
+            if (prepared.replacesService()) {
+                return new DraftReply(drafts.switchPrompt(snapshot, prepared), null, null, patch, false);
+            }
             return new DraftReply(drafts.progress(prepared), prepared, draftReceipt("SUCCEEDED", 200, started));
         } catch (ResponseStatusException failure) {
             int code = failure.getStatusCode().value();
@@ -177,12 +244,12 @@ public class AiConversationService {
         if (!previous.isEmpty()) {
             var turn = previous.getFirst();
             if (!hash.equals(turn.get("request_hash"))) throw reusedKey();
-            if (turn.get("response_id") instanceof Number reply) return new Turn(reply.longValue(), List.of(), null);
+            if (turn.get("response_id") instanceof Number reply) return new Turn(reply.longValue(), List.of(), null, null);
         }
         var legacy = repository.sendFindAiMessages(id, key);
         if (!legacy.isEmpty()) {
             if (!text.equals(legacy.getFirst().get("content"))) throw reusedKey();
-            return new Turn(((Number) legacy.getFirst().get("id")).longValue(), List.of(), null);
+            return new Turn(((Number) legacy.getFirst().get("id")).longValue(), List.of(), null, null);
         }
         if (repository.hasRunningTurn(id)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Đang xử lý một tin nhắn. Vui lòng thử lại.");
@@ -195,7 +262,7 @@ public class AiConversationService {
             context.addFirst(Map.of("role", "SYSTEM", "content", draft.changes()));
         }
         context.add(Map.of("role", "USER", "content", text));
-        return new Turn(null, context, draft);
+        return new Turn(null, context, draft, drafts.pendingSwitch(id));
     }
 
     private void requireActive(long id) {

@@ -16,27 +16,33 @@ final class NaturalBookingRequest {
             + "|\\b(?:nao|khong|sao) (?:a|nhi|vay)$|\\b(?:nao|khong|sao)$");
 
     private static final List<Rule> RULES = List.of(
-        rule("GROCERY_SHOPPING", "di (?:sieu thi|cho ho)|di cho giup|chon thuc pham"
+        rule("GROCERY_SHOPPING", "di (?:sieu thi|cho ho)|di cho giup|(?:ghe|qua) (?:cho|sieu thi) mua|chon thuc pham"
             + "|mua(?: [a-z0-9]+){0,9} (?:thuc pham|do an|do tuoi|rau cu|rau sach|thit heo|thit lon|thit bo|hai san|trai cay|hoa qua)"),
-        rule("AC_MAINTENANCE", "(?:nap|bom|them) (?:ga|gas)|(?:bao duong|bao tri) (?:may lanh|dieu hoa)"),
+        rule("AC_MAINTENANCE", "(?:nap|bom|cham|them) (?:them )?(?:ga|gas)|(?:bao duong|bao tri) (?:may lanh|dieu hoa)"),
         rule("AC_CLEANING", "(?:ve sinh|rua|lam sach|xit rua)(?: (?:giup|ho|toi|minh|may|mot|hai|ba|bon|nam|sau|bay|tam|chin|muoi|[0-9]+)){0,4} (?:may lanh|dieu hoa)"),
-        rule("CHILD_CARE", "bao mau|(?:trong|giu|cham|cham soc) (?:tre(?: em)?|be|con(?: nho)?)"),
-        rule("ELDERLY_CARE", "(?:cham|cham soc|trong) (?:nguoi gia|nguoi cao tuoi|ong ba|cu gia)"),
-        rule("PET_CARE", "(?:cham|cham soc|trong|giu|tam|dat di dao) (?:thu cung|cho meo|cho|meo)"),
+        rule("CHILD_CARE", "bao mau|(?:trong|giu|cham|cham soc) (?:tre(?: em)?|(?:em )?be|con(?: nho)?|nhoc)"
+            + "|o (?:chung |cung )?voi (?:be|con toi|con minh|nhoc)"),
+        rule("ELDERLY_CARE", "(?:cham|cham soc|trong) (?:nguoi gia|nguoi cao tuoi|ong ba|cu gia)"
+            + "|diu (?:ba|cu|ong) (?:di lai|di bo)"),
+        rule("PET_CARE", "(?:cham|cham soc|trong|giu|tam|dat di dao) (?:thu cung|cho meo|cho|meo|cun)"
+            + "|dat (?:cun|cho|meo) di dao|cho (?:cun|cho|meo) an|do hat cho (?:cun|cho|meo)"),
         rule("PLANT_CARE", "(?:cham|cham soc|tuoi|cat tia) (?:cay(?: canh)?|vuon|san vuon)"),
         rule("LAUNDRY", "giat (?:ui|la|do|quan ao|chan ga)|(?:ui|la) (?:do|quan ao)"),
-        rule("COOKING", "nau (?:an|com|bua (?:an|sang|trua|toi)|mon an)"),
+        rule("COOKING", "nau (?:an|com|bua (?:an|com|sang|trua|toi|cho ca nha)|mon an)"),
         rule("OTHER_SERVICES", "(?:phun )?(?:khu khuan|khu trung|khu mui am moc)|xu ly am moc"),
         rule("REFRIGERATOR_CLEANING", "(?:ve sinh|lau don|lam sach|khu mui) (?:tu lanh|tu dong)"),
         rule("WASHING_MACHINE", "(?:ve sinh|lam sach|rua) (?:may giat|long giat)"),
         rule("DRYER_CLEANING", "(?:ve sinh|lam sach|rua) may say(?: quan ao)?"),
-        rule("CLEANING_UPHOLSTERY", "(?:ve sinh|lam sach|giat|hut bui) (?:ghe )?(?:sofa|so pha|nem|dem|rem(?: cua)?)"),
+        rule("CLEANING_UPHOLSTERY", "(?:ve sinh|lam sach|giat|hut bui) (?:ghe )?(?:sofa|so pha|nem|dem|rem(?: cua)?)"
+            + "|(?:ve sinh|lam sach|giat|hut bui) ghe boc (?:vai|ni|da)"),
         rule("CLEANING_DEEP", "tong ve sinh toan dien", "tong ve sinh toan dien"),
         rule("CLEANING_DEEP", "tong ve sinh|(?:don|ve sinh) (?:ky|sau|toan bo) (?:can ho|nha)"
             + "|(?:don|ve sinh) (?:nha|can ho) sau (?:xay|sua|thi cong)", "tong ve sinh"),
-        rule("CLEANING_HOURLY", "(?:don(?: dep)?|ve sinh) (?:nha )?(?:dinh ky|hang tuan|moi tuan|hang thang)", "don dep dinh ky"),
+        rule("CLEANING_HOURLY", "(?:don(?: dep)?|ve sinh) (?:nha )?(?:dinh ky|hang tuan|moi tuan|hang thang"
+            + "|moi thu (?:hai|ba|tu|nam|sau|bay)|moi chu nhat)", "don dep dinh ky"),
         rule("CLEANING_HOURLY", "(?:don(?: dep)?|ve sinh) (?:nha )?theo ca", "don dep theo ca"),
-        rule("CLEANING_HOURLY", "don (?:dep )?nha(?: cua)?(?: theo gio)?(?! sau (?:xay|sua|thi cong))|giup viec theo gio", "don dep nha theo gio"),
+        rule("CLEANING_HOURLY", "don (?:dep )?nha(?: cua)?(?: theo gio)?(?! sau (?:xay|sua|thi cong))"
+            + "|don (?:dep )?can ho theo gio|giup viec theo gio", "don dep nha theo gio"),
         rule("CLEANING_HOURLY", "ve sinh nha(?: cua)?(?: theo gio)?(?! sau (?:xay|sua|thi cong))", "ve sinh nha theo gio")
     );
 

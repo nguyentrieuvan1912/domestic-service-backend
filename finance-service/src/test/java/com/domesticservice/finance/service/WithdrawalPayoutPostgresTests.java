@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class WithdrawalPayoutPostgresTests {
     @Configuration(proxyBeanMethods=false) @EnableAutoConfiguration @Import({NativeQueryExecutor.class,WithdrawalPayoutRepository.class,com.domesticservice.finance.repository.FinanceOperationsSqlRepository.class,com.domesticservice.finance.repository.BankLookupRepository.class})
     static class Config {
+        @Bean CustomerWalletService customerWallet(){return org.mockito.Mockito.mock(CustomerWalletService.class);}
         @Bean PayoutProperties payoutConfig(){return new PayoutProperties(true,"test-client","test-api","payout-test-key","source-only","TEST COMPANY","970452",2000,1000000);}
         @Bean(destroyMethod="stop") Peer peer(ObjectMapper json,PayoutProperties config)throws Exception{return new Peer(json,config);}
         @Bean PayoutBankDirectory directory(PayoutProperties config,ObjectMapper json){return new PayoutBankDirectory(config,json){@Override public List<Map<String,Object>> banks(){return List.of(Map.of("bin","970452","name","Test bank","shortName","TEST"));}};}

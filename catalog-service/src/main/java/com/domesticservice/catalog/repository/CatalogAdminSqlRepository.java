@@ -26,7 +26,7 @@ public class CatalogAdminSqlRepository {
     }
 
     public List<Map<String, Object>> snapshotFindServices(Object... args) {
-        return db.queryForList("SELECT s.id,s.service_name AS name,s.description,s.category_id AS \"categoryId\",c.category_name AS \"categoryName\",s.status,s.service_code AS code,s.service_type AS \"serviceType\",s.price_unit AS \"priceUnit\",s.base_price AS \"basePrice\",s.estimated_duration_minutes AS \"durationMinutes\",s.requires_qualification AS \"requiresQualification\" FROM services s JOIN service_categories c ON c.id=s.category_id ORDER BY s.id", args);
+        return db.queryForList("SELECT s.id,s.service_name AS name,s.description,s.category_id AS \"categoryId\",c.category_name AS \"categoryName\",s.status,s.image_url AS \"imageUrl\",s.service_code AS code,s.service_type AS \"serviceType\",s.price_unit AS \"priceUnit\",s.base_price AS \"basePrice\",s.estimated_duration_minutes AS \"durationMinutes\",s.requires_qualification AS \"requiresQualification\" FROM services s JOIN service_categories c ON c.id=s.category_id ORDER BY s.id", args);
     }
 
     public List<Map<String, Object>> snapshotFindServiceRequirements(Object... args) {

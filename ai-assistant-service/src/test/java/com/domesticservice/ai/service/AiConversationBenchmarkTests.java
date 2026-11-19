@@ -43,6 +43,7 @@ class AiConversationBenchmarkTests {
     @Autowired CatalogSemanticRecommendations recommendations;
     private HttpServer identity;
     private AiConversationService service;
+    private AiConversationService fastAnswersOnly;
     private AiBookingDraftService drafts;
     private final List<Map<String, Object>> results = new ArrayList<>();
     private static final String TOKEN = "Bearer isolated-benchmark";
@@ -93,6 +94,8 @@ class AiConversationBenchmarkTests {
             System.getenv().getOrDefault("OLLAMA_MODEL", "qwen3:8b"), tools, json, knowledge);
         drafts = new AiBookingDraftService(draftRepository, conversations, transactions, json, identityUrl, catalogUrl);
         service = new AiConversationService(conversations, provider, transactions, drafts, identityUrl);
+        var offlineProvider = new OllamaChatProvider("http://127.0.0.1:1", "unused", tools, json, knowledge);
+        fastAnswersOnly = new AiConversationService(conversations, offlineProvider, transactions, drafts, identityUrl);
     }
 
     @TestFactory
@@ -170,7 +173,13 @@ class AiConversationBenchmarkTests {
             Map.entry("Tôi muốn thuê người giúp việc theo giờ", "Dọn dẹp nhà theo giờ"),
             Map.entry("Tôi cần vệ sinh nhà cửa", "Vệ sinh nhà theo giờ"),
             Map.entry("Mình cần dọn nhà sau sửa", "Tổng vệ sinh"),
-            Map.entry("Tôi cần tổng vệ sinh toàn diện căn hộ", "Tổng vệ sinh toàn diện"));
+            Map.entry("Tôi cần tổng vệ sinh toàn diện căn hộ", "Tổng vệ sinh toàn diện"),
+            Map.entry("Nhờ châm thêm ga cho máy lạnh", "Bảo dưỡng & Nạp gas máy lạnh"),
+            Map.entry("Mình cần người ở với con mình một buổi", "Bảo mẫu & Chăm sóc trẻ em"),
+            Map.entry("Nhờ ghé chợ mua ít cá rồi mang qua nhà", "Đi chợ hộ & Chọn thực phẩm tươi"),
+            Map.entry("Mình cần người dắt cún đi dạo", "Chăm sóc thú cưng tại nhà"),
+            Map.entry("Nhờ dọn nhà mỗi thứ bảy", "Dọn dẹp định kỳ"),
+            Map.entry("Tôi muốn giặt ghế bọc vải trong phòng khách", "Vệ sinh sofa, nệm & rèm"));
         return requests.entrySet().stream().map(entry -> DynamicTest.dynamicTest(entry.getKey(), () -> {
             long conversation = ((Number) service.create(TOKEN).get("id")).longValue();
             var reply = service.send(TOKEN, conversation, Map.of("content", entry.getKey(),
@@ -184,6 +193,88 @@ class AiConversationBenchmarkTests {
                 assertEquals(1, data.path("quantity").asInt());
                 assertFalse(data.has("addressId"));
                 assertFalse(data.has("answers"));
+            }
+        }));
+    }
+
+    @TestFactory
+    Stream<DynamicTest> naturalFollowUpsCoverCurrentCatalog() {
+        record FollowUp(long serviceId, String message, Map<String, Object> answers, Map<String, Object> draftFields) {
+            FollowUp(long serviceId, String message, Map<String, Object> answers) {
+                this(serviceId, message, answers, Map.of());
+            }
+        }
+        var cases = List.of(
+            new FollowUp(1, "Ở chung cư, tầm 78 mét vuông, nhà chưa có dụng cụ",
+                Map.of("homeType", "Căn hộ", "areaM2", 78, "hasSupplies", false)),
+            new FollowUp(2, "Nha minh co 92 m2, co san nuoc lau san", Map.of("areaM2", 92, "hasSupplies", true)),
+            new FollowUp(3, "Nhà vừa sơn xong, 3 tầng", Map.of("homeCondition", "Sau sửa chữa", "floors", 3)),
+            new FollowUp(4, "Sô pha, bọc nỉ", Map.of("furnitureType", "Sofa", "material", "Nỉ")),
+            new FollowUp(5, "Ba điều hòa, máy gắn tường, phải leo thang, hai nhân viên làm song song",
+                Map.of("airconType", "Treo tường", "access", "Cần thang cao"),
+                Map.of("quantity", 3, "requiredStaffCount", 2)),
+            new FollowUp(6, "Không cần đo ga, dàn nóng dễ với tới",
+                Map.of("gasInspection", false, "access", "Dễ tiếp cận")),
+            new FollowUp(7, "Lồng ngang, máy 9 ký, chưa có vòi nước gần máy",
+                Map.of("washerType", "Cửa trước", "capacityKg", 9, "waterAccess", false)),
+            new FollowUp(8, "Bơm nhiệt, đặt trên máy giặt", Map.of("dryerType", "Bơm nhiệt", "dryerPosition", "Chồng trên máy giặt")),
+            new FollowUp(9, "Tủ hai cửa, dung tích 400 lít, tủ vẫn còn đồ ăn",
+                Map.of("fridgeType", "Hai cửa", "capacityLitres", 400, "emptyFridge", false)),
+            new FollowUp(10, "Nhà mình có hai đứa", Map.of("childCount", 2)),
+            new FollowUp(11, "Bà 82 tuổi, phải dìu", Map.of("careAge", 82, "mobility", "Cần hỗ trợ")),
+            new FollowUp(12, "Nấu cho 5 người ăn, 4 món, kiểu miền Nam, mình đã mua đủ nguyên liệu rồi",
+                Map.of("diners", 5, "dishCount", 4, "mealStyle", "Miền Nam", "ingredients", "Khách đã chuẩn bị")),
+            new FollowUp(13, "6 ký quần áo, đồ lụa và len", Map.of("laundryKg", 6, "delicates", "Lụa / len")),
+            new FollowUp(14, "Tối đa 350 ngàn, nếu hết hàng gọi mình trước khi đổi",
+                Map.of("shoppingBudget", 350000, "substitution", "Gọi khách trước khi đổi")),
+            new FollowUp(15, "Nhà nuôi cún, có hai con chó, nặng 8 ký",
+                Map.of("animalType", "Chó", "animalCount", 2, "weightKg", 8)),
+            new FollowUp(16, "Ngoài ban công, tám chậu cây", Map.of("gardenType", "Ban công", "plantCount", 8)),
+            new FollowUp(17, "Làm ở văn phòng, khoảng 65 mét vuông", Map.of("disinfectionSpace", "Văn phòng", "areaM2", 65)),
+            new FollowUp(18, "Nhà mặt đất, 95 m²", Map.of("homeType", "Nhà phố", "areaM2", 95)),
+            new FollowUp(19, "Văn phòng, có sẵn dụng cụ vệ sinh", Map.of("homeType", "Văn phòng", "hasSupplies", true)),
+            new FollowUp(20, "Mới chuyển nhà, hai lầu", Map.of("homeCondition", "Sau chuyển nhà", "floors", 2))
+        );
+        return cases.stream().map(test -> DynamicTest.dynamicTest(test.serviceId() + " " + test.message(), () -> {
+            long conversation = ((Number) service.create(TOKEN).get("id")).longValue();
+            try {
+                var original = drafts.patch(TOKEN, conversation,
+                    new AiBookingDraftService.Patch(null, null, Map.of("serviceId", test.serviceId())));
+                long started = System.nanoTime();
+                var reply = fastAnswersOnly.send(TOKEN, conversation, Map.of("content", test.message(),
+                    "clientKey", UUID.randomUUID().toString()));
+                var stored = drafts.get(TOKEN, conversation);
+                assertEquals(original.get("id"), stored.get("id"));
+                var data = json.valueToTree(stored.get("data"));
+                assertEquals(test.serviceId(), data.path("serviceId").asLong());
+                test.answers().forEach((field, expected) -> assertEquals(expected.toString(), data.path("answers").path(field).asText(), field));
+                test.draftFields().forEach((field, expected) -> assertEquals(expected.toString(), data.path(field).asText(), field));
+                assertTrue(reply.containsKey("bookingDraft"));
+                System.out.printf("Natural reply %d: %.0f ms%n", test.serviceId(), (System.nanoTime() - started) / 1e6);
+            } finally {
+                service.clear(TOKEN, conversation);
+            }
+        }));
+    }
+
+    @TestFactory
+    Stream<DynamicTest> naturalFollowUpsUsingOllama() {
+        record FollowUp(long serviceId, String message, String multiSelectField, java.util.Set<String> choices) {}
+        return Stream.of(
+            new FollowUp(1, "Ưu tiên làm kỹ bếp với toilet, phòng ngủ thì khỏi lau", "priorityAreas",
+                java.util.Set.of("Nhà bếp", "Nhà vệ sinh")),
+            new FollowUp(13, "Đồ đã giặt rồi, chỉ cần ủi rồi gấp lại cho mình", "laundryTasks",
+                java.util.Set.of("Ủi", "Gấp quần áo"))
+        ).map(test -> DynamicTest.dynamicTest(test.message(), () -> {
+            long conversation = ((Number) service.create(TOKEN).get("id")).longValue();
+            try {
+                drafts.patch(TOKEN, conversation, new AiBookingDraftService.Patch(null, null, Map.of("serviceId", test.serviceId())));
+                service.send(TOKEN, conversation, Map.of("content", test.message(), "clientKey", UUID.randomUUID().toString()));
+                var values = json.valueToTree(drafts.get(TOKEN, conversation)).path("data").path("answers")
+                    .path(test.multiSelectField()).valueStream().map(JsonNode::asText).collect(java.util.stream.Collectors.toSet());
+                assertEquals(test.choices(), values);
+            } finally {
+                service.clear(TOKEN, conversation);
             }
         }));
     }

@@ -4,6 +4,8 @@ services:
     gpus: all
     environment:
       WHISPER_VOICE_DEVICE: cuda
+      WHISPER_VOICE_MODEL: ${WHISPER_VOICE_MODEL:-large-v3-q5_0}
+      WHISPER_VOICE_BEAM_SIZE: "5"
       CUDA_CACHE_PATH: /models/.cuda-cache
   ai-assistant-service:
     environment:

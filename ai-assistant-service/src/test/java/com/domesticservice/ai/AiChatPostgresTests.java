@@ -111,7 +111,7 @@ class AiChatPostgresTests {
     }
 
     @Test
-    void bookingAnotherCatalogServiceKeepsSeparateDraftsAndConsultationCollapsesThem() {
+    void bookingAnotherCatalogServiceRequiresConfirmationAndReplacesTheOnlyDraft() {
         String token = "Bearer owner";
         long id = conversation();
         service.send(token, id, request("AC_SINGLE_TEST"));
@@ -120,8 +120,44 @@ class AiChatPostgresTests {
             ((Number) previous.get("id")).longValue(), ((Number) previous.get("version")).longValue(),
             Map.of("addressId", 812, "promotionCode", "AC_ONLY")));
 
-        var reply = service.send(token, id, request("Tôi muốn đặt vệ sinh nhà cửa"));
-        var card = (Map<?, ?>) reply.get("bookingDraft");
+        var proposal = request("Tôi muốn đặt vệ sinh nhà cửa");
+        var reply = service.send(token, id, proposal);
+        assertFalse(reply.containsKey("bookingDraft"));
+        String question = service.messages(token, id).getLast().get("content").toString();
+        assertTrue(question.contains("Vệ sinh máy lạnh") && question.contains("Vệ sinh nhà theo giờ"), question);
+        assertTrue(question.contains("sẽ được bỏ"), question);
+        assertEquals(true, drafts.list(token, id).get("switchPending"));
+
+        long previousId = ((Number) previous.get("id")).longValue();
+        var original = drafts.get(token, id, previousId);
+        var originalData = (Map<?, ?>) original.get("data");
+        assertEquals(812, originalData.get("addressId"));
+        assertEquals("AC_ONLY", originalData.get("promotionCode"));
+        assertEquals(404, assertThrows(ResponseStatusException.class,
+            () -> drafts.get("Bearer other", id, previousId)).getStatusCode().value());
+        assertEquals(409, assertThrows(ResponseStatusException.class,
+            () -> drafts.patch(token, id, new AiBookingDraftService.Patch(previousId,
+                ((Number) original.get("version")).longValue(), Map.of("serviceId", 2)))).getStatusCode().value());
+
+        service.send(token, id, request("Giữ dịch vụ hiện tại"));
+        assertEquals(false, drafts.list(token, id).get("switchPending"));
+        assertEquals(original, drafts.get(token, id, previousId));
+
+        service.send(token, id, request("Tôi muốn đặt vệ sinh nhà cửa"));
+        var before = java.time.ZonedDateTime.now(java.time.ZoneId.of("Asia/Ho_Chi_Minh"));
+        var time = service.send(token, id, request("Bây giờ là mấy giờ?"));
+        var after = java.time.ZonedDateTime.now(before.getZone());
+        var hhmm = java.time.format.DateTimeFormatter.ofPattern("HH:mm");
+        String timeReply = service.messages(token, id).getLast().get("content").toString();
+        assertTrue(timeReply.contains("**" + hhmm.format(before) + "**")
+            || timeReply.contains("**" + hhmm.format(after) + "**"), timeReply);
+        assertFalse(time.containsKey("bookingDraft"));
+        assertEquals(true, drafts.list(token, id).get("switchPending"));
+        assertEquals(original, drafts.get(token, id, previousId));
+
+        var confirmation = request("Đồng ý");
+        var accepted = service.send(token, id, confirmation);
+        var card = (Map<?, ?>) accepted.get("bookingDraft");
         assertNotNull(card);
         assertNotEquals(previous.get("id"), card.get("id"));
         var data = (Map<?, ?>) card.get("data");
@@ -134,14 +170,12 @@ class AiChatPostgresTests {
 
         var panel = drafts.list(token, id);
         assertEquals(card.get("id"), panel.get("expandedDraftId"));
-        assertEquals(2, ((java.util.List<?>) panel.get("drafts")).size());
-        long previousId = ((Number) previous.get("id")).longValue();
-        var original = drafts.get(token, id, previousId);
-        var originalData = (Map<?, ?>) original.get("data");
-        assertEquals(812, originalData.get("addressId"));
-        assertEquals("AC_ONLY", originalData.get("promotionCode"));
+        assertEquals(1, ((java.util.List<?>) panel.get("drafts")).size());
+        assertEquals(false, panel.get("switchPending"));
+        assertEquals("CANCELLED", jdbc.queryForObject("SELECT status FROM booking_drafts WHERE id=?", String.class, previousId));
         assertEquals(404, assertThrows(ResponseStatusException.class,
-            () -> drafts.get("Bearer other", id, previousId)).getStatusCode().value());
+            () -> drafts.get(token, id, previousId)).getStatusCode().value());
+        assertEquals(accepted.get("id"), service.send(token, id, confirmation).get("id"));
 
         var consultation = request("Chính sách bảo hiểm là gì?");
         service.send(token, id, consultation);
@@ -149,17 +183,14 @@ class AiChatPostgresTests {
         assertNull(collapsed.get("expandedDraftId"));
         assertEquals(panel.get("drafts"), collapsed.get("drafts"));
 
-        var switched = service.send(token, id, request("Chuyển sang vệ sinh máy lạnh"));
-        var resumed = (Map<?, ?>) switched.get("bookingDraft");
-        var ac = (Map<?, ?>) resumed.get("data");
-        assertEquals(previousId, resumed.get("id"));
+        var switchBack = service.send(token, id, request("Chuyển sang vệ sinh máy lạnh"));
+        assertFalse(switchBack.containsKey("bookingDraft"));
+        var restored = (Map<?, ?>) service.send(token, id, request("Xác nhận đổi dịch vụ")).get("bookingDraft");
+        var ac = (Map<?, ?>) restored.get("data");
+        assertNotEquals(previousId, restored.get("id"));
         assertEquals(5L, ((Number) ac.get("serviceId")).longValue());
-        assertEquals(12L, ((Number) ac.get("packageId")).longValue());
-        assertEquals(1L, ((Number) ac.get("requiredStaffCount")).longValue());
-        assertEquals("AC_ONLY", ac.get("promotionCode"));
-        assertEquals(previousId, drafts.list(token, id).get("expandedDraftId"));
-        service.send(token, id, consultation);
-        assertEquals(previousId, drafts.list(token, id).get("expandedDraftId"));
+        assertFalse(ac.containsKey("promotionCode"));
+        assertEquals(restored.get("id"), drafts.list(token, id).get("expandedDraftId"));
     }
 
     @Test

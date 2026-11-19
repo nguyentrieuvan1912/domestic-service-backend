@@ -33,6 +33,14 @@ public class AiConversationSqlRepository {
         db.update("UPDATE ai_conversations SET expanded_draft_id=? WHERE id=?", draftId, conversation);
     }
 
+    public String pendingDraftSwitch(long conversation) {
+        return db.queryForObject("SELECT pending_draft_switch::text FROM ai_conversations WHERE id=?", String.class, conversation);
+    }
+
+    public void setPendingDraftSwitch(long conversation, String proposal) {
+        db.update("UPDATE ai_conversations SET pending_draft_switch=CAST(? AS jsonb) WHERE id=?", proposal, conversation);
+    }
+
     public List<Map<String, Object>> conversationsFindAiConversations(Object... args) {
         return db.queryForList("SELECT id,title,status,started_at AS \"startedAt\" FROM ai_conversations WHERE customer_id=? AND status='ACTIVE' ORDER BY id DESC", args);
     }
@@ -133,6 +141,6 @@ public class AiConversationSqlRepository {
         db.update("DELETE FROM ai_chat_turns WHERE conversation_id=?", conversation);
         db.update("DELETE FROM ai_messages WHERE conversation_id=?", conversation);
         db.update("DELETE FROM booking_drafts WHERE conversation_id=? AND customer_id=?", conversation, customer);
-        db.update("UPDATE ai_conversations SET status='ENDED',ended_at=COALESCE(ended_at,now()) WHERE id=?", conversation);
+        db.update("UPDATE ai_conversations SET status='ENDED',ended_at=COALESCE(ended_at,now()),pending_draft_switch=NULL WHERE id=?", conversation);
     }
 }

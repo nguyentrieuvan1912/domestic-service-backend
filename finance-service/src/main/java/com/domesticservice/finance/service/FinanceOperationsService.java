@@ -79,7 +79,44 @@ public class FinanceOperationsService {
 
     public List<Map<String, Object>> banks(String token) {
         long staff = ServiceHttpClient.userId(identity.authenticate(token, "STAFF"));
+        return staffBanks(staff);
+    }
+
+    private List<Map<String, Object>> staffBanks(long staff) {
         return withBankNames(repository.banksFindStaffBankAccounts(staff));
+    }
+
+    @Transactional
+    public List<Map<String,Object>> setDefaultBank(String token, long id) {
+        long staff = ServiceHttpClient.userId(identity.authenticate(token, "STAFF"));
+        balance(staff, true);
+        var bank = ownedBank(staff, id);
+        if (!"VERIFIED".equals(bank.get("status")))
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Chỉ tài khoản đã xác minh mới được đặt mặc định.");
+        repository.clearDefaultBank(staff);
+        repository.setDefaultBank(staff, id);
+        return staffBanks(staff);
+    }
+
+    @Transactional
+    public List<Map<String,Object>> unlinkBank(String token, long id) {
+        long staff = ServiceHttpClient.userId(identity.authenticate(token, "STAFF"));
+        // The same wallet lock serializes bank changes with withdrawal creation and payout.
+        balance(staff, true);
+        var bank = ownedBank(staff, id);
+        if (bank.get("unlinked_at") != null) return staffBanks(staff);
+        if (repository.hasOpenBankWithdrawal(staff, id))
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Tài khoản này đang có yêu cầu rút tiền chưa kết thúc.");
+        repository.unlinkBank(staff, id);
+        repository.ensureDefaultBank(staff);
+        return staffBanks(staff);
+    }
+
+    private Map<String,Object> ownedBank(long staff, long id) {
+        var rows = repository.ownedBank(staff, id);
+        if (rows.isEmpty() || ("INACTIVE".equals(rows.getFirst().get("status")) && rows.getFirst().get("unlinked_at") == null))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy tài khoản ngân hàng đang liên kết.");
+        return rows.getFirst();
     }
 
     private List<Map<String,Object>> withBankNames(List<Map<String,Object>> rows) {
@@ -107,15 +144,28 @@ public class FinanceOperationsService {
             holder=proof.get("account_holder").toString();
         }else if(holder.isBlank())throw bad("Vui lòng nhập tên chủ tài khoản để đối chiếu.");
         balance(staff, true);
-        var existing = repository.saveBankFindStaffBankAccounts(Long.class, staff, bank, account);
-        if (!existing.isEmpty()) {
-            if(proof!=null){bankLookup.verify(existing.getFirst(),staff,proof);return Map.of("id",existing.getFirst(),"status","VERIFIED");}
-            return Map.of("id", existing.getFirst(), "status", repository.saveBankFindStaffBankAccounts2(String.class, existing.getFirst()));
+        var existing = repository.bankByDetails(staff, bank, account);
+        long id;
+        String status = "PENDING";
+        if (existing.isEmpty()) {
+            id = repository.insertBank(staff, bank, account, holder);
+        } else {
+            var previous = existing.getFirst();
+            id = ((Number) previous.get("id")).longValue();
+            if (previous.get("unlinked_at") != null) {
+                repository.relinkBank(id, staff, holder);
+            } else {
+                status = previous.get("status").toString();
+                if ("INACTIVE".equals(status))
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "Tài khoản đã ngừng sử dụng. Vui lòng liên hệ quản trị viên.");
+            }
         }
-        boolean first = !Boolean.TRUE.equals(repository.saveBankExistsStaffBankAccounts(Boolean.class, staff));
-        long id = repository.saveBankInsertStaffBankAccounts(staff, bank, account, holder, first);
-        if(proof!=null){bankLookup.verify(id,staff,proof);return Map.of("id",id,"status","VERIFIED");}
-        return Map.of("id", id, "status", "PENDING");
+        if (proof != null) {
+            bankLookup.verify(id, staff, proof);
+            status = "VERIFIED";
+        }
+        repository.ensureDefaultBank(staff);
+        return Map.of("id", id, "status", status, "accounts", staffBanks(staff));
     }
 
     @Transactional
@@ -180,14 +230,20 @@ public class FinanceOperationsService {
             throw bad("Chỉ được xác minh hoặc ngừng tài khoản.");
         String note=text(b,"verificationNote",2000,"VERIFIED".equals(state));
         if("VERIFIED".equals(state) && note.length()<8) throw bad("Ghi rõ nguồn đối chiếu số tài khoản và tên người nhận.");
+        var owners=repository.bankOwners(id);
+        if(owners.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Không tìm thấy tài khoản ngân hàng.");
+        long staff=owners.getFirst();
+        balance(staff,true);
         var rows=repository.bankForReview(id);
-        if(rows.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Không tìm thấy tài khoản ngân hàng.");
         var before=rows.getFirst();long adminId=ServiceHttpClient.userId(admin);
+        if(before.get("unlinked_at")!=null)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"Nhân viên đã bỏ liên kết tài khoản này.");
         // Repeating the same submitted decision must not create a second audit or change its timestamp.
         if(state.equals(before.get("status")) && Objects.equals(before.get("verified_by"),adminId) && note.equals(Objects.toString(before.get("verification_note"),"")) && before.get("verified_at")!=null)
             return Map.of("id",id,"status",state);
         repository.insertBankReview(before,adminId,Objects.toString(admin.get("fullName"),""),state,note);
-        repository.verifyBankUpdateStaffBankAccounts(state,note,adminId,id);
+        repository.verifyBankUpdateStaffBankAccounts(state,note,adminId,state,id);
+        repository.ensureDefaultBank(staff);
         return Map.of("id",id,"status",state);
     }
 
