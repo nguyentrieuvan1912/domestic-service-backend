@@ -221,8 +221,9 @@ public class BookingOperationsService {
             return new WeeklySchedulePolicy.Period(date.atTime(((Time) p.get("start_time")).toLocalTime()).atZone(ZONE).toInstant(), date.atTime(((Time) p.get("end_time")).toLocalTime()).atZone(ZONE).toInstant());
         }).toList();
         WeeklySchedulePolicy.protectPast(before, periods, now);
-        List<String> areas = validatedAreas(token, body.get("areaIds"));
-        if (areas.isEmpty())
+        WeeklySchedulePolicy.requireMinimumHour(before, periods, now);
+        List<String> areas = body.containsKey("areaIds") ? validatedAreas(token, body.get("areaIds")) : null;
+        if (areas != null && areas.isEmpty())
             throw error(HttpStatus.BAD_REQUEST, "Chọn ít nhất một phường/xã nhận việc.");
         var bookings = repository.saveScheduleFindBookings(staff);
         for (var b : bookings) {
@@ -230,16 +231,36 @@ public class BookingOperationsService {
             var date = a.atZone(ZONE).toLocalDate();
             if (!date.isBefore(week) && !date.isAfter(week.plusDays(6)) && !WeeklySchedulePolicy.covers(periods, a, z))
                 throw error(HttpStatus.CONFLICT, "Lịch mới không bao phủ ca đã nhận.");
-            String area = Objects.toString(b.get("district"), "");
-            if (modernArea(area) && !areas.contains(area))
-                throw error(HttpStatus.CONFLICT, "Phải giữ phường/xã của ca đã nhận: " + area);
         }
+        if (areas != null) validateAssignedAreas(bookings, areas);
         repository.saveScheduleDeleteStaffAvailabilities(staff, week, week.plusDays(6));
         for (var p : periods) repository.saveScheduleInsertStaffAvailabilities(staff, p.start().atZone(ZONE).toLocalDate(), p.start().atZone(ZONE).toLocalTime(), p.end().atZone(ZONE).toLocalTime());
-        saveAreas(staff, areas);
+        if (areas != null) saveAreas(staff, areas);
         repository.saveScheduleInsertStaffScheduleWeeks(staff, week);
         repository.saveScheduleUpdateStaffScheduleSettings(!Boolean.FALSE.equals(body.get("matchNotifications")), staff);
         return schedule(staff);
+    }
+
+    @Transactional
+    public Map<String, Object> saveStaffAreas(String token, Map<String, Object> body) {
+        long staff = ServiceHttpClient.userId(actor(token, "STAFF"));
+        var areas = validatedAreas(token, body.get("areaIds"));
+        lockStaff(staff);
+        long revision = num(body, "revision", -1, 0, Long.MAX_VALUE);
+        if (revision != repository.saveScheduleFindStaffScheduleSettings(Long.class, staff))
+            throw error(HttpStatus.CONFLICT, "Khu vực hoặc lịch đã được cập nhật. Vui lòng tải lại.");
+        validateAssignedAreas(repository.saveScheduleFindBookings(staff), areas);
+        saveAreas(staff, areas);
+        repository.bumpStaffScheduleRevision(staff);
+        return schedule(staff);
+    }
+
+    private void validateAssignedAreas(List<Map<String, Object>> bookings, List<String> areas) {
+        for (var booking : bookings) {
+            String area = Objects.toString(booking.get("district"), "");
+            if (modernArea(area) && !areas.contains(area))
+                throw error(HttpStatus.CONFLICT, "Phải giữ phường/xã của ca đã nhận: " + area);
+        }
     }
 
     boolean weekRegistered(long staff, Instant start) {
@@ -331,6 +352,9 @@ public class BookingOperationsService {
         long admin = ServiceHttpClient.userId(actor(token, "ADMIN"));
         staffOperations(token, staff);
         lockStaff(staff);
+        if (body.containsKey("areaIds") && body.containsKey("scheduleRevision")
+                && num(body, "scheduleRevision", -1, 0, Long.MAX_VALUE) != repository.saveScheduleFindStaffScheduleSettings(Long.class, staff))
+            throw error(HttpStatus.CONFLICT, "Khu vực hoặc lịch đã được cập nhật. Vui lòng tải lại hồ sơ nhân viên.");
         var active = services(token);
         if (body.containsKey("skillIds")) {
             var selected = stringList(body.get("skillIds"));
@@ -347,8 +371,10 @@ public class BookingOperationsService {
                 repository.saveStaffOperationsInsertStaffServiceCapabilities(staff, sid, admin, admin);
             }
         }
-        if (body.containsKey("areaIds"))
+        if (body.containsKey("areaIds")) {
             saveAreas(staff, validatedAreas(token, body.get("areaIds")));
+            repository.bumpStaffScheduleRevision(staff);
+        }
         if (body.containsKey("restrictions")) {
             for (var r : maps(body.get("restrictions"))) {
                 long id = num(r, "id", 0, 0, Long.MAX_VALUE);

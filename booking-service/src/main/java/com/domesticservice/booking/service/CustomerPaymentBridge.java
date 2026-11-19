@@ -19,32 +19,69 @@ public class CustomerPaymentBridge {
  }
  public void authorize(String supplied){if(key.isBlank() || !java.security.MessageDigest.isEqual(key.getBytes(java.nio.charset.StandardCharsets.UTF_8),Objects.toString(supplied,"").getBytes(java.nio.charset.StandardCharsets.UTF_8)))throw new ResponseStatusException(HttpStatus.FORBIDDEN);}
  public Map<String,Object> snapshot(long id){var rows=db.queryForList("SELECT * FROM bookings WHERE id=?",id);if(rows.isEmpty())throw new ResponseStatusException(HttpStatus.NOT_FOUND);return flow.bookingView(rows.getFirst());}
+ public Map<String,Object> changeMethod(long id,long customer,String method) {
+  if (!List.of("BANK_TRANSFER_QR","WALLET","CASH").contains(Objects.toString(method,"")))
+   throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Phương thức thanh toán không hợp lệ.");
+  var initial=db.queryForMap("SELECT * FROM bookings WHERE id=?",id);
+  var invited=invitedStaff(id,initial);
+  boolean cash="CASH".equals(method);
+  var profiles=cash?ops.identityClient().list("/api/v1/identity/staff-directory",null):List.<Map<String,Object>>of();
+  return tx.execute(state->{
+   if(cash && !invited.isEmpty())ops.lockStaff(invited.getFirst());
+   var b=db.queryForMap("SELECT * FROM bookings WHERE id=? FOR UPDATE",id);
+   if(((Number)b.get("customer_id")).longValue()!=customer)throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+   if(!"AWAITING_PAYMENT".equals(b.get("status")) || !"PENDING".equals(b.get("payment_status"))
+      || !Boolean.TRUE.equals(b.get("pricing_confirmed")) || tooLate(b))
+    throw new ResponseStatusException(HttpStatus.CONFLICT,"Đơn không còn ở trạng thái có thể đổi phương thức.");
+   db.update("UPDATE bookings SET payment_method=? WHERE id=?",method,id);
+   if(cash) {
+    b.put("payment_method",method);
+    dispatch(id,b,invited,profiles,customer,true);
+   }
+   return snapshot(id);
+  });
+ }
+
+ private List<Long> invitedStaff(long id,Map<String,Object> booking) {
+  return "MODE_A".equals(booking.get("booking_mode"))?db.queryForList("SELECT staff_id FROM booking_assignments WHERE booking_id=? AND status='ASSIGNED'",Long.class,id):List.of();
+ }
+
+ private boolean tooLate(Map<String,Object> booking) {
+  return !((java.sql.Timestamp)booking.get("starts_at")).toInstant().isAfter(java.time.Instant.now().plusSeconds(300));
+ }
+
+ private void dispatch(long id,Map<String,Object> booking,List<Long> invited,List<Map<String,Object>> profiles,long customer,boolean cash) {
+  var candidate=new LinkedHashMap<>(booking);candidate.put("booking_mode","MODE_B");
+  boolean manual="MODE_A".equals(booking.get("booking_mode"));
+  boolean canMatch;
+  if(manual)canMatch=!invited.isEmpty() && profiles.stream().anyMatch(p->((Number)p.get("id")).longValue()==invited.getFirst() && flow.eligibility(invited.getFirst(),candidate,p).isEmpty());
+  else canMatch=profiles.stream().filter(p->flow.eligibility(((Number)p.get("id")).longValue(),candidate,p).isEmpty()).count()>=((Number)booking.get("required_staff_count")).longValue();
+  if(!canMatch || tooLate(booking)){
+   db.update("UPDATE booking_assignments SET status='CANCELLED',execution_status='CANCELLED',cancellation_reason='Không có nhân viên phù hợp' WHERE booking_id=? AND status='ASSIGNED'",id);
+   flow.transition(booking,"NO_STAFF_FOUND",0,"SYSTEM",cash?"Không có đủ nhân viên phù hợp để kết nối dịch vụ.":"Không có đủ nhân viên phù hợp để kết nối dịch vụ; tiền được hoàn về ví.");
+   return;
+  }
+  db.update("UPDATE bookings SET staff_response_deadline=CASE WHEN booking_mode='MODE_A' THEN now()+interval '5 minutes' END,staff_wait_state=CASE WHEN booking_mode='MODE_A' THEN 'WAITING' END,staff_wait_round=CASE WHEN booking_mode='MODE_A' THEN 1 ELSE 0 END WHERE id=?",id);
+  flow.transition(booking,manual?"STAFF_ASSIGNED":"MATCHING",customer,cash?"CUSTOMER":"SYSTEM",cash?"Khách chọn thanh toán tiền mặt sau khi hoàn thành dịch vụ.":"Finance đã xác minh đủ tiền thanh toán.");
+ }
  @SuppressWarnings("unchecked") public void reconcile(long id){
   var proof=finance.get().uri("/api/v1/finance/internal/customer-payments/"+id).header("X-Service-Key",key).retrieve().body(Map.class);
   long paid=((Number)proof.get("paidAmount")).longValue(),refunded=((Number)proof.get("refundedAmount")).longValue();
   var initial=db.queryForMap("SELECT * FROM bookings WHERE id=?",id);
   boolean awaiting="AWAITING_PAYMENT".equals(initial.get("status"));
   var profiles=awaiting && paid-refunded>=((Number)initial.get("total_amount")).longValue()?ops.identityClient().list("/api/v1/identity/staff-directory",null):List.<Map<String,Object>>of();
-  var invited="MODE_A".equals(initial.get("booking_mode"))?db.queryForList("SELECT staff_id FROM booking_assignments WHERE booking_id=? AND status='ASSIGNED'",Long.class,id):List.<Long>of();
+  var invited=invitedStaff(id,initial);
   tx.executeWithoutResult(state->{
    // Match creation/claim's staff -> booking lock order and recheck eligibility after acquiring it.
    if(awaiting && !invited.isEmpty())ops.lockStaff(invited.getFirst());
    var rows=db.queryForList("SELECT * FROM bookings WHERE id=? FOR UPDATE",id);if(rows.isEmpty())return;var b=rows.getFirst();
+   if ("CASH".equals(b.get("payment_method"))) return;
    long total=((Number)b.get("total_amount")).longValue();
    String payment=paid>0 && refunded>=paid?"REFUNDED":paid-refunded>=total && total>0?"PAID":"PENDING";
    if("REFUNDED".equals(b.get("payment_status")))payment="REFUNDED";
    db.update("UPDATE bookings SET payment_status=? WHERE id=?",payment,id);
    if("AWAITING_PAYMENT".equals(b.get("status")) && "PAID".equals(payment) && Boolean.TRUE.equals(b.get("pricing_confirmed"))){
-    var candidate=new LinkedHashMap<>(b);candidate.put("booking_mode","MODE_B");
-    boolean canMatch;
-    if("MODE_A".equals(b.get("booking_mode")))canMatch=!invited.isEmpty() && profiles.stream().anyMatch(p->((Number)p.get("id")).longValue()==invited.getFirst() && flow.eligibility(invited.getFirst(),candidate,p).isEmpty());
-    else canMatch=profiles.stream().filter(p->flow.eligibility(((Number)p.get("id")).longValue(),candidate,p).isEmpty()).count()>=((Number)b.get("required_staff_count")).longValue();
-    if(!canMatch || ((java.sql.Timestamp)b.get("starts_at")).toInstant().isBefore(java.time.Instant.now().plusSeconds(300))){
-     db.update("UPDATE booking_assignments SET status='CANCELLED',execution_status='CANCELLED',cancellation_reason='Không có nhân viên phù hợp sau thanh toán' WHERE booking_id=? AND status='ASSIGNED'",id);
-     flow.transition(b,"NO_STAFF_FOUND",0,"SYSTEM","Không có đủ nhân viên phù hợp để kết nối dịch vụ; tiền được hoàn về ví.");return;
-    }
-    db.update("UPDATE bookings SET staff_response_deadline=CASE WHEN booking_mode='MODE_A' THEN now()+interval '5 minutes' END,staff_wait_state=CASE WHEN booking_mode='MODE_A' THEN 'WAITING' END,staff_wait_round=CASE WHEN booking_mode='MODE_A' THEN 1 ELSE 0 END WHERE id=?",id);
-    flow.transition(b,"MODE_A".equals(b.get("booking_mode"))?"STAFF_ASSIGNED":"MATCHING",0,"SYSTEM","Finance đã xác minh đủ tiền thanh toán.");
+    dispatch(id,b,invited,profiles,0,false);
    }
   });
  }

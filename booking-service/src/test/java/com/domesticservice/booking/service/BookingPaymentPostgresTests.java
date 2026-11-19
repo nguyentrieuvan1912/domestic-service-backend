@@ -39,7 +39,8 @@ class BookingPaymentPostgresTests {
   Peer(ObjectMapper json)throws Exception{this.json=json;server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);server.createContext("/",x->{
    String path=x.getRequestURI().getPath();Object response;
    if(path.contains("customer-payments"))response=Map.of("paidAmount",paid,"refundedAmount",refunded);
-   else if(path.contains("auth/me"))response=Map.of("id",customer,"role","CUSTOMER");
+   else if(path.contains("auth/me"))response=("Bearer "+staff).equals(x.getRequestHeaders().getFirst("Authorization"))?Map.of("id",staff,"role","STAFF"):Map.of("id",customer,"role","CUSTOMER");
+   else if(path.contains("administrative-units"))response=Map.of("items",List.of(Map.of("name","Phường Sài Gòn")));
    else if(path.contains("staff-directory"))response=available?List.of(Map.of("id",staff,"isOnline",true,"staffStatus","AVAILABLE","fullName","Test staff")):List.of();
    else if(path.contains("addresses"))response=Map.of("id",customer,"city","Ho Chi Minh","ward","Payment test ward");
    else if(path.endsWith("consume"))response=Map.of("consumed",true);
@@ -48,7 +49,7 @@ class BookingPaymentPostgresTests {
   });server.start();}
   String url(){return "http://127.0.0.1:"+server.getAddress().getPort();}public void stop(){server.stop(0);}
  }
- @Autowired JdbcTemplate db;@Autowired Peer peer;@Autowired BookingCreationService creation;@Autowired BookingWorkflowService flow;@Autowired CustomerPaymentBridge bridge;
+ @Autowired JdbcTemplate db;@Autowired Peer peer;@Autowired BookingCreationService creation;@Autowired BookingWorkflowService flow;@Autowired CustomerPaymentBridge bridge;@Autowired BookingOperationsService ops;
  long customer,staff;Instant start;
  @BeforeEach void setup(){
   customer=ThreadLocalRandom.current().nextLong(10000000,100000000);staff=customer+100000000;
@@ -74,6 +75,28 @@ class BookingPaymentPostgresTests {
  @Test void cancellationBeforePaymentCannotBeReopenedByLateReceipt(){long id=id(create("WALLET"));flow.cancel(token(),id,Map.of("reason","Cancel before paying"));peer.paid=10000;bridge.reconcile(id);assertEquals("CANCELLED",status(id));peer.refunded=10000;bridge.reconcile(id);peer.refunded=0;bridge.reconcile(id);assertEquals("REFUNDED",db.queryForObject("SELECT payment_status FROM bookings WHERE id=?",String.class,id));}
  @Test void databaseRejectsAcceptanceBeforePayment(){long id=id(create("BANK_TRANSFER_QR"));assertThrows(org.springframework.dao.DataIntegrityViolationException.class,()->db.update("INSERT INTO booking_assignments(booking_id,staff_id,status) VALUES (?,?,'ACCEPTED')",id,staff));assertEquals(0,db.queryForObject("SELECT count(*) FROM booking_assignments WHERE booking_id=? AND status='ACCEPTED'",Integer.class,id));}
  @Test void cashKeepsExistingMatchingFlow(){assertEquals("MATCHING",create("CASH").get("status"));}
+ @Test void cashSwitchUsesTheExistingUnpaidBookingAndStartsMatching(){
+  long id=id(create("WALLET"));
+  assertThrows(ResponseStatusException.class,()->bridge.changeMethod(id,customer+1,"CASH"));
+  var updated=bridge.changeMethod(id,customer,"BANK_TRANSFER_QR");
+  assertEquals("AWAITING_PAYMENT",updated.get("status"));
+  assertEquals("BANK_TRANSFER_QR",updated.get("paymentMethod"));
+  updated=bridge.changeMethod(id,customer,"CASH");
+  assertEquals("MATCHING",updated.get("status"));
+  assertEquals("PENDING",updated.get("paymentStatus"));
+  assertEquals("CASH",updated.get("paymentMethod"));
+  assertThrows(ResponseStatusException.class,()->bridge.changeMethod(id,customer,"WALLET"));
+ }
+ @Test void areasAreSavedIndependentlyOfARegisteredWeek(){
+  String staffToken="Bearer "+staff;
+  var before=ops.schedule(staff);
+  var saved=ops.saveStaffAreas(staffToken,Map.of("areaIds",List.of("Phường Sài Gòn"),"revision",0));
+  var current=(Map<?,?>)saved.get("saved");
+  assertEquals(List.of("Phường Sài Gòn"),current.get("areaIds"));
+  assertEquals(((Map<?,?>)before.get("saved")).get("days"),current.get("days"));
+  assertEquals(1L,current.get("revision"));
+  assertThrows(ResponseStatusException.class,()->ops.saveStaffAreas(staffToken,Map.of("areaIds",List.of(),"revision",0)));
+ }
  @Test void favouriteInvitationStartsOnlyAfterPaymentAndDoesNotHoldUnpaidSlot(){
   var body=new LinkedHashMap<String,Object>(Map.of("requestKey","fav-payment-"+customer,"startsAt",start.toString(),"mode","MODE_A","paymentMethod","BANK_TRANSFER_QR","addressId",customer,"staffId",staff));
   var b=creation.create(token(),body);long id=id(b);assertEquals("AWAITING_PAYMENT",b.get("status"));assertNull(b.get("staffResponseDeadline"));

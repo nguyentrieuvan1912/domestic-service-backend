@@ -10,6 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import tools.jackson.databind.ObjectMapper;
@@ -24,6 +25,7 @@ public class CustomerTopupService {
     public CustomerTopupService(CustomerTopupRepository repository, PayosClient provider, PlatformTransactionManager manager,
                              ObjectMapper json, @Value("${clients.identity.base-url}") String identityUrl) {
         this.repository=repository; this.provider=provider; this.tx=new TransactionTemplate(manager);
+        this.tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.identity=new ServiceHttpClient(identityUrl); this.json=json;
     }
     public Map<String, Object> readiness(String token) {
@@ -35,9 +37,10 @@ public class CustomerTopupService {
         var user=identity.authenticate(token,admin?"ADMIN":"CUSTOMER");
         return repository.list(admin?null:ServiceHttpClient.userId(user)).stream().map(this::view).toList();
     }
-    public Map<String, Object> create(String token, StaffTopupRequest request) { return create(token,request,null); }
-    public Map<String,Object> create(String token, StaffTopupRequest request, Long bookingId) {
-        long staff=ServiceHttpClient.userId(identity.authenticate(token,"CUSTOMER"));
+    public Map<String, Object> create(String token, StaffTopupRequest request) {
+        return create(ServiceHttpClient.userId(identity.authenticate(token,"CUSTOMER")),request,null);
+    }
+    private Map<String,Object> create(long staff, StaffTopupRequest request, Long bookingId) {
         provider.requireReady();
         var row=tx.execute(state->repository.request(staff,request.amount(),request.requestKey(),bookingId));
         if (!Objects.equals(row.get("booking_id"),bookingId) || number(row,"amount")!=request.amount()) throw conflict("Mã yêu cầu đã dùng cho số tiền khác.");
@@ -62,6 +65,63 @@ public class CustomerTopupService {
             throw conflict("Thông tin tài khoản nhận hoặc mã thanh toán payOS không khớp cấu hình. Chưa được chuyển tiền.");
         tx.executeWithoutResult(state->{repository.lockWallet(staff);repository.find(id,true);repository.link(id,link);});
         return view(repository.find(id,false));
+    }
+
+    Map<String,Object> bookingQr(long booking, long customer) {
+        var active = repository.bookingAttempt(booking, customer);
+        return active == null ? null : view(active);
+    }
+
+    Map<String,Object> bookingQr(long booking, long customer, long amount) {
+        var active = repository.bookingAttempt(booking, customer);
+        if (active != null) {
+            long id = number(active, "id");
+            String status = Objects.toString(active.get("status"));
+            boolean expired = !((java.sql.Timestamp)active.get("expires_at")).toInstant().isAfter(Instant.now());
+            if (!"PAID".equals(status) && (expired || List.of("CANCELLED", "EXPIRED").contains(status))) {
+                if (!retireBookingQr(active)) return view(repository.find(id, false));
+            } else {
+                return create(customer, new StaffTopupRequest(amount, (String)active.get("request_key")), booking);
+            }
+        }
+        Long previous = repository.lastBookingAttempt(booking);
+        String requestKey = "booking-" + booking + (previous == null ? "" : "-" + previous);
+        return create(customer, new StaffTopupRequest(amount, requestKey), booking);
+    }
+
+    void closeBookingQr(long booking, long customer) {
+        var active = repository.bookingAttempt(booking, customer);
+        if (active != null && !retireBookingQr(active))
+            throw conflict("Đã ghi nhận tiền hoặc giao dịch đang được đối soát. Chưa thể đổi phương thức.");
+    }
+
+    private boolean retireBookingQr(Map<String,Object> active) {
+        long id = number(active, "id"), customer = number(active, "customer_id");
+        if (number(active, "amount_received") > 0 || "PAID".equals(active.get("status"))) return false;
+        var proof = provider.lookup(id);
+        if (proof == null) {
+            if (active.get("provider_link_id") != null || ((java.sql.Timestamp)active.get("expires_at")).toInstant().isAfter(Instant.now()))
+                throw conflict("Chưa xác minh được mã QR cũ. Vui lòng kiểm tra lại trước khi đổi phương thức.");
+            return Boolean.TRUE.equals(tx.execute(state -> {
+                repository.lockWallet(customer);
+                var row = repository.find(id, true);
+                if (row.get("provider_link_id") != null || number(row, "amount_received") > 0
+                        || !List.of("CREATING", "EXPIRED").contains(row.get("status"))) return false;
+                repository.observation(id, "EXPIRED", 0);
+                return repository.retire(id);
+            }));
+        }
+        reconcile(id, proof);
+        if (number(proof, "amountPaid") > 0) return false;
+        if (!List.of("CANCELLED", "EXPIRED").contains(proof.get("status"))) {
+            proof = provider.cancel(id);
+            reconcile(id, proof);
+        }
+        if (!List.of("CANCELLED", "EXPIRED").contains(proof.get("status")) || number(proof, "amountPaid") > 0) return false;
+        return Boolean.TRUE.equals(tx.execute(state -> {
+            repository.lockWallet(customer);
+            return repository.retire(id);
+        }));
     }
     static boolean validCheckout(String url) {
         try { var uri=java.net.URI.create(url);return "https".equals(uri.getScheme()) && "pay.payos.vn".equals(uri.getHost()) && uri.getUserInfo()==null; }
@@ -107,8 +167,11 @@ public class CustomerTopupService {
             if(number(proof,"orderCode")!=id || number(proof,"amount")!=amount || link.isBlank()
                 || row.get("provider_link_id")!=null && !row.get("provider_link_id").equals(link)) throw conflict("Kết quả đối soát không khớp yêu cầu nạp.");
             String status=Objects.toString(proof.get("status"),"");
+            if (received < number(row, "amount_received")) return;
             boolean accountVerified=Boolean.TRUE.equals(row.get("receiving_account_verified"));
-            String next=received>0 || !accountVerified?"REVIEW":switch(status){case "CANCELLED"->"CANCELLED";case "EXPIRED"->"EXPIRED";default->"PENDING";};
+            boolean closed = List.of("CANCELLED", "EXPIRED").contains(status);
+            if (received == 0 && !closed && List.of("CANCELLED", "EXPIRED").contains(row.get("status"))) return;
+            String next=received>0 || (!accountVerified && !closed)?"REVIEW":switch(status){case "CANCELLED"->"CANCELLED";case "EXPIRED"->"EXPIRED";default->"PENDING";};
             repository.observation(id,next,received);
             if(accountVerified && "PAID".equals(status) && received>=amount && number(proof,"amountRemaining")==0) repository.credit(id,staff,received);
         });
@@ -135,7 +198,7 @@ public class CustomerTopupService {
         result.put("bookingId",row.get("booking_id"));result.put("customerId",row.get("customer_id"));result.put("checkoutUrl",row.get("checkout_url"));
         result.put("requestKey",row.get("request_key"));
         // Expose only the provider-signed QR persisted for this verified, payable intent.
-        boolean payable=Boolean.TRUE.equals(row.get("receiving_account_verified")) && "PENDING".equals(row.get("status"))
+        boolean payable=row.get("retired_at")==null && Boolean.TRUE.equals(row.get("receiving_account_verified")) && "PENDING".equals(row.get("status"))
             && ((java.sql.Timestamp)row.get("expires_at")).toInstant().isAfter(Instant.now());
         result.put("qrCode",payable?row.get("qr_content"):null);
         result.put("accountNumber",row.get("account_number"));result.put("accountName",row.get("account_name"));result.put("bankBin",row.get("bank_bin"));

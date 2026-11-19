@@ -8,10 +8,14 @@ Customer endpoints require the authenticated CUSTOMER bearer session. IDs are nu
 | GET | `/customer/me/topups` | Up to 100 account-owned intents, including booking QR intents |
 | POST | `/customer/me/topups` | `{amount,requestKey}`; 2,000–1,000,000 VND. Retry the same key after a network failure. |
 | POST | `/customer/me/topups/{id}/refresh` | Reconcile the owned intent with signed payOS evidence |
-| POST | `/customer/bookings/{id}/pay` | WALLET: debit the exact price once; QR: `{topup,payment}` with the persisted QR intent |
+| GET | `/customer/bookings/{id}/qr` | `{topup}` for the current QR attempt, or `{topup:null}` |
+| POST | `/customer/bookings/{id}/pay?method={method}` | WALLET: debit the exact price once. QR: `{topup,payment}` with the current QR, or a replacement after confirmed closure with zero received. The optional method guard rejects stale requests. |
+| PUT | `/customer/bookings/{id}/payment-method` | `{method}` accepts `WALLET`, `BANK_TRANSFER_QR` or `CASH`. Returns the updated Booking snapshot. Finance verifies and closes any active QR before changing the method of an unpaid booking. Cash starts dispatch. |
 | POST | `/bookings/{id}/payment` | Existing route aliases the same payment operation |
 
 Topup responses include `id,customerId,bookingId,amount,requestKey,status,qrCode,accountNumber,accountName,bankBin,description,amountReceived,expiresAt,paidAt,verifiedAt`. QR is exposed only for verified, pending, unexpired intents. Wallet entries are append-only. Separate customer/staff tables and provider order code ranges prevent ownership or provider collisions.
+
+Finance keeps prior attempts after rotating or closing a booking QR. A verified late receipt on a retired QR credits the wallet and cannot pay the booking again.
 
 Booking create accepts exactly `CASH`, `BANK_TRANSFER_QR`, `WALLET`. Cash retains the existing flow. The other methods persist a priced `AWAITING_PAYMENT` booking; it cannot be claimed or dispatched to staff. Clients show a payment page and may resume from booking detail. QR intents use the booking's exact amount; the bank transaction must be independently confirmed by payOS. A redirect or pressing the check button is not proof of payment.
 
@@ -23,8 +27,9 @@ Internal endpoints require constant-time checked `X-Service-Key` matching existi
 
 - Booking GET `/api/v1/booking/internal/bookings/{id}` returns the booking snapshot.
 - Booking POST `/api/v1/booking/internal/bookings/{id}/reconcile-payment` re-reads Finance proof and commits a local transition.
+- Booking PUT `/api/v1/booking/internal/bookings/{id}/payment-method` accepts `{customerId,method}` from Finance and rechecks eligibility to change the booking.
 - Finance GET `/api/v1/finance/internal/customer-payments/{id}` returns gross paid and refunded amounts.
 
-No cross-database queries or shared JPA entities are used. Migrations: Finance V13 and Booking V12. PayOS creation and verification use the existing configured credentials, account pinning and signed HTTP client. No new provider credentials or mock runtime data are added.
+No cross-database queries or shared JPA entities are used. The wallet schema starts at Finance V13 and Booking V12. Finance V17 preserves QR attempt history. PayOS creation and verification use the existing configured credentials, account pinning and signed HTTP client. No new provider credentials or mock runtime data are added.
 
 Verification: `mvnw.cmd verify`; optional real PostgreSQL integration tests `CustomerWalletPostgresTests` with `TOPUP_POSTGRES_VERIFY=true` / `TOPUP_TEST_URL`, and `BookingPaymentPostgresTests` with `CUSTOMER_PAYMENT_POSTGRES_VERIFY=true` / `BOOKING_WALLET_TEST_URL`. Run these only against disposable databases (test credentials are fixed in test annotations); HTTP peers in those tests are isolated fixtures and never make real transfers.

@@ -81,6 +81,10 @@ public class BookingOperationsSqlRepository {
         return db.update("UPDATE staff_schedule_settings SET revision=revision+1,match_notifications=?,updated_at=now() WHERE staff_id=?", args);
     }
 
+    public void bumpStaffScheduleRevision(long staff) {
+        db.update("UPDATE staff_schedule_settings SET revision=revision+1,updated_at=now() WHERE staff_id=?", staff);
+    }
+
     public <T> T weekRegisteredExistsStaffScheduleWeeks(Class<T> type, Object... args) {
         return db.queryForObject("SELECT EXISTS(SELECT 1 FROM staff_schedule_weeks WHERE staff_id=? AND week_start=?)", type, args);
     }

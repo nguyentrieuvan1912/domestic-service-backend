@@ -31,6 +31,14 @@ final class WeeklySchedulePolicy {
         return false;
     }
 
+    static void requireMinimumHour(List<Period> before, List<Period> after, Instant now) {
+        for (var period : after) {
+            if (period.end().isAfter(now) && Duration.between(period.start(), period.end()).toMinutes() < 60
+                    && !before.contains(period))
+                throw error(HttpStatus.BAD_REQUEST, "Mỗi ca làm việc phải kéo dài ít nhất 1 tiếng.");
+        }
+    }
+
     // Compare the actual union before server time, including the slot already in progress.
     static void protectPast(List<Period> before, List<Period> after, Instant now) {
         for (var p : before) if (p.start().isBefore(now) && !covers(after, p.start(), p.end().isBefore(now) ? p.end() : now))

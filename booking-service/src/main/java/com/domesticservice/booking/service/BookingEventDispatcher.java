@@ -81,9 +81,20 @@ public class BookingEventDispatcher {
                         return;
                     }
                     String state = Objects.toString(payload.get("status"), Objects.toString(event.get("event_type"))), code = Objects.toString(b.get("booking_code"));
+                    if ("AWAITING_PAYMENT".equals(state)) {
+                        if (state.equals(b.get("status"))) {
+                            identity.internalEvent(key, Map.of("eventKey", "booking:" + id,
+                                "userIds", List.of(b.get("customer_id")), "type", "SYSTEM",
+                                "title", "Đơn " + code + " đang chờ thanh toán",
+                                "content", "Tiếp tục thanh toán để hoàn tất đặt dịch vụ.",
+                                "referenceId", b.get("id"), "data", Map.of("bookingId", b.get("id")), "bookingCreated", false));
+                        }
+                        repository.dispatchUpdateOutboxEvents3(id);
+                        return;
+                    }
                     Set<Long> users = new LinkedHashSet<>();
                     users.add(((Number) b.get("customer_id")).longValue());
-                    if (!"AWAITING_PAYMENT".equals(state)) users.addAll(repository.dispatchFindBookingAssignments(Long.class, b.get("id")));
+                    users.addAll(repository.dispatchFindBookingAssignments(Long.class, b.get("id")));
                     boolean created = ("PENDING".equals(payload.get("oldStatus")) || "AWAITING_PAYMENT".equals(payload.get("oldStatus"))) && List.of("MATCHING", "STAFF_ASSIGNED").contains(state);
                     List<Long> preferred = List.of();
                     boolean widenLater = false;

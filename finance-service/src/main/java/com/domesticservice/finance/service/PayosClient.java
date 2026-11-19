@@ -67,6 +67,10 @@ public class PayosClient {
     }
     public Map<String, Object> lookup(long id) { return call("GET", "/v2/payment-requests/" + id, null, true); }
 
+    public Map<String, Object> cancel(long id) {
+        return call("POST", "/v2/payment-requests/" + id + "/cancel", Map.of("cancellationReason", "Khách cập nhật thanh toán"), false);
+    }
+
     public String sign(Map<String, Object> data) {
         try {
             String canonical = new TreeMap<>(data).entrySet().stream()
@@ -91,7 +95,7 @@ public class PayosClient {
         try {
             var request = HttpRequest.newBuilder(base.resolve(path)).timeout(Duration.ofSeconds(10))
                 .header("x-client-id", config.clientId()).header("x-api-key", config.apiKey()).header("Content-Type", "application/json");
-            if (body == null) request.GET(); else request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
+            if ("GET".equals(method)) request.GET(); else request.POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(body)));
             var response = http.send(request.build(), HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() == 404 && allowMissing) return null;
             if (response.statusCode() != 200) throw unavailable();
