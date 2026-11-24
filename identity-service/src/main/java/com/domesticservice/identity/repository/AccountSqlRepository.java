@@ -4,6 +4,9 @@ import com.domesticservice.identity.repository.support.NativeQueryExecutor;
 import org.springframework.stereotype.Repository;
 import com.domesticservice.identity.dto.AccountRequests.*;
 import java.sql.Timestamp;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.Instant;
 import java.util.*;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
@@ -42,12 +45,46 @@ public class AccountSqlRepository {
         return db.update("INSERT INTO admins(id) VALUES (?)", args);
     }
 
-    public List<Map<String, Object>> loginFindUsers(Object... args) {
-        return db.queryForList("SELECT id,password_hash,status FROM users WHERE lower(email)=? OR phone=? OR lower(user_name)=?", args);
+    public record PasswordAccount(long id, String hash, String role, String status, int failures, Instant windowStartedAt) {
     }
 
-    public int loginUpdateUsers(Object... args) {
-        return db.update("UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?", args);
+    private static PasswordAccount passwordAccount(ResultSet row, int index) throws SQLException {
+        Timestamp started = row.getTimestamp("password_failure_window");
+        return new PasswordAccount(row.getLong("id"), row.getString("password_hash"), row.getString("role"),
+            row.getString("status"), row.getInt("password_failure_count"), started == null ? null : started.toInstant());
+    }
+
+    public List<PasswordAccount> loginFindUsers(String identifier, String phone) {
+        return db.query("""
+            SELECT id,password_hash,role,status,password_failure_count,password_failure_window
+            FROM users WHERE lower(email)=? OR phone=? OR lower(user_name)=? ORDER BY id FOR UPDATE
+            """, AccountSqlRepository::passwordAccount, identifier, phone, identifier);
+    }
+
+    public void loginUpdateUsers(long id) {
+        db.update("""
+            UPDATE users SET last_login_at=CURRENT_TIMESTAMP,password_failure_count=0,password_failure_window=NULL
+            WHERE id=?
+            """, id);
+    }
+
+    public PasswordAccount passwordAccount(long id) {
+        return db.queryForObject("""
+            SELECT id,password_hash,role,status,password_failure_count,password_failure_window
+            FROM users WHERE id=? FOR UPDATE
+            """, AccountSqlRepository::passwordAccount, id);
+    }
+
+    public void recordPasswordFailure(long id, int failures, Instant windowStartedAt) {
+        db.update("UPDATE users SET password_failure_count=?,password_failure_window=? WHERE id=?",
+            failures, Timestamp.from(windowStartedAt), id);
+    }
+
+    public int updatePassword(long id, String oldHash, String newHash) {
+        return db.update("""
+            UPDATE users SET password_hash=?,updated_at=CURRENT_TIMESTAMP,password_failure_count=0,password_failure_window=NULL
+            WHERE id=? AND status='ACTIVE' AND password_hash=?
+            """, newHash, id, oldHash);
     }
 
     public int issueDeleteAccountSessions(Object... args) {
@@ -67,6 +104,10 @@ public class AccountSqlRepository {
 
     public int logoutDeleteAccountSessions(Object... args) {
         return db.update("DELETE FROM account_sessions WHERE token_hash=?", args);
+    }
+
+    public void revokeOtherSessions(long id, String currentTokenHash) {
+        db.update("DELETE FROM account_sessions WHERE user_id=? AND token_hash<>?", id, currentTokenHash);
     }
 
     public User userFindUsers(Object... args) {

@@ -35,7 +35,7 @@ class BlogApiTests {
                 ScriptUtils.executeSqlScript(connection,new ClassPathResource(script));
         }
         accounts.bootstrap("editor@test.invalid","0901000001","EditorTest!123");
-        token="Bearer "+accounts.login(new Login("editor@test.invalid","EditorTest!123")).accessToken();
+        token="Bearer "+accounts.login(new Login("editor@test.invalid","EditorTest!123","ADMIN")).accessToken();
         when(cloud.ready()).thenReturn(false);
     }
     HttpResponse<String> call(String method,String path,Object body,String auth) throws Exception {
@@ -106,7 +106,7 @@ class BlogApiTests {
         db.update("INSERT INTO users(user_name,password_hash,full_name,phone,email,role,status) VALUES ('blog-customer',?,'Customer','0901000002','customer@test.invalid','CUSTOMER','ACTIVE')",password);
         long customer=db.queryForObject("SELECT id FROM users WHERE user_name='blog-customer'",Long.class);
         db.update("INSERT INTO customers(id) VALUES (?)",customer);
-        String customerToken="Bearer "+accounts.login(new Login("customer@test.invalid","CustomerTest!123")).accessToken();
+        String customerToken="Bearer "+accounts.login(new Login("customer@test.invalid","CustomerTest!123","CUSTOMER")).accessToken();
         assertEquals(403,call("GET","/admin/blog",null,customerToken).statusCode());
         assertEquals(403,call("POST","/admin/blog",draft("not-admin","DRAFT"),customerToken).statusCode());
         db.update("INSERT INTO blog_media(owner_id,public_id,resource_type,expires_at) VALUES (?,'other-owner','image',?)",customer,java.sql.Timestamp.from(java.time.Instant.now().plusSeconds(60)));

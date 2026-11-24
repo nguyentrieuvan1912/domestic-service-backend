@@ -10,20 +10,29 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mail.MailSendException;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 import tools.jackson.databind.ObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
 
 @ActiveProfiles("test")
 @SpringBootTest(webEnvironment=SpringBootTest.WebEnvironment.RANDOM_PORT,
-    properties="spring.datasource.url=jdbc:h2:mem:accounttests;MODE=PostgreSQL;DB_CLOSE_DELAY=-1")
+    properties={"spring.datasource.url=jdbc:h2:mem:accounttests;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+        "identity.mail.from=cleanmaster@test.invalid"})
 @Sql("/accounts-schema.sql")
 class AccountApiTests {
     @LocalServerPort int port;
     @Autowired AccountService accounts;
     @Autowired JdbcTemplate db;
     @Autowired ObjectMapper json;
+    @MockitoBean JavaMailSender mailSender;
     final HttpClient client=HttpClient.newHttpClient();
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     com.domesticservice.identity.service.CloudinaryClient cloud;
@@ -61,6 +70,15 @@ class AccountApiTests {
         return client.send(builder.build(),HttpResponse.BodyHandlers.ofString());
     }
     String token(HttpResponse<String> response) { assertThat(response.statusCode()).isBetween(200,201); return json.readTree(response.body()).get("accessToken").asText(); }
+    String staffPassword() {
+        var email = org.mockito.ArgumentCaptor.forClass(SimpleMailMessage.class);
+        verify(mailSender).send(email.capture());
+        assertThat(email.getValue().getTo()).containsExactly("staff@test.invalid");
+        return email.getValue().getText().lines()
+            .map(line -> line.replaceFirst("^Mật khẩu khởi tạo: ([A-Za-z0-9_-]{32})$", "$1"))
+            .filter(line -> line.matches("[A-Za-z0-9_-]{32}"))
+            .findFirst().orElseThrow();
+    }
     Map<String,Object> registration() { return Map.of("fullName","Khách thử nghiệm","phone","0900000002","email","customer@test.invalid","password","Customer!123","role","ADMIN"); }
     @Test void avatarsPersistOnlyAfterCloudSuccessAndEnforceStaffPolicy() throws Exception {
         String customer=token(request("POST","/auth/register",registration(),null));
@@ -79,13 +97,13 @@ class AccountApiTests {
         assertThat(request("PATCH","/auth/avatar",Map.of("avatar",""),customer).body()).contains("default-avatar.png");
         assertThat(db.queryForObject("SELECT avatar_url FROM users WHERE role='CUSTOMER'",String.class)).isEqualTo("/api/v1/identity/default-avatar.png");
         long candidateId=candidate(); evaluate(candidateId);
-        assertThat(request("POST","/admin/candidates/"+candidateId+"/staff-account",Map.of("password","StaffTest!123","rank","STANDARD","avatar",""),admin).statusCode()).isEqualTo(400);
+        assertThat(request("POST","/admin/candidates/"+candidateId+"/staff-account",Map.of("rank","STANDARD","avatar",""),admin).statusCode()).isEqualTo(400);
         assertThat(db.queryForObject("SELECT count(*) FROM users WHERE role='STAFF'",Integer.class)).isZero();
         org.mockito.Mockito.doReturn("https://res.cloudinary.com/test/image/upload/staff.png").when(cloud).uploadAvatar(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyString());
-        var created=request("POST","/admin/candidates/"+candidateId+"/staff-account",Map.of("password","StaffTest!123","rank","STANDARD"),admin);
+        var created=request("POST","/admin/candidates/"+candidateId+"/staff-account",Map.of("rank","STANDARD"),admin);
         assertThat(created.statusCode()).isEqualTo(201);
         long staffId=json.readTree(created.body()).get("staffId").asLong();
-        String staff=token(request("POST","/auth/login",Map.of("identifier","staff@test.invalid","password","StaffTest!123"),null));
+        String staff=token(request("POST","/auth/login",Map.of("identifier","staff@test.invalid","password",staffPassword()),null));
         assertThat(request("PATCH","/auth/avatar",Map.of("avatar",avatarData()),staff).statusCode()).isEqualTo(403);
         assertThat(request("PATCH","/auth/avatar",Map.of("avatar",""),staff).statusCode()).isEqualTo(403);
         var update=new LinkedHashMap<String,Object>(Map.of("fullName","Nhân viên","phone","0900000003","status","ACTIVE","rank","STANDARD","avatar",avatarData()));
@@ -230,9 +248,50 @@ class AccountApiTests {
         assertThat(request("POST","/auth/register",Map.of("fullName","A","phone","invalid","email","bad","password","short"),null).statusCode()).isEqualTo(400);
         assertThat(request("POST","/auth/register",Map.of("fullName","A","phone","0900000004","email","other@test.invalid","password","đ".repeat(40)),null).statusCode()).isEqualTo(400);
     }
+
+    @Test void passwordLimitsAreSharedByAliasesAndPasswordChange() throws Exception {
+        String customer = token(request("POST", "/auth/register", registration(), null));
+        var wrongRole = request("POST", "/auth/login", Map.of(
+            "identifier", "customer@test.invalid", "password", "Customer!123", "role", "ADMIN"), null);
+        assertThat(wrongRole.statusCode()).isEqualTo(401);
+        assertThat(wrongRole.body()).doesNotContain("accessToken");
+        assertThat(wrongRole.headers().firstValue("Cache-Control")).hasValue("no-store");
+        assertThat(db.queryForObject("SELECT count(*) FROM account_sessions", Integer.class)).isEqualTo(2);
+
+        var wrongChange = Map.of("currentPassword", "wrong", "newPassword", "NewCustomer!123",
+            "confirmPassword", "NewCustomer!123");
+        assertThat(request("PATCH", "/auth/password", wrongChange, customer).statusCode()).isEqualTo(400);
+        for (String alias : List.of("customer@test.invalid", "+84900000002", "0900000002", "CUSTOMER@TEST.INVALID")) {
+            assertThat(request("POST", "/auth/login", Map.of("identifier", alias, "password", "wrong"), null).statusCode()).isEqualTo(401);
+        }
+        var correct = Map.of("identifier", "customer@test.invalid", "password", "Customer!123", "role", "CUSTOMER");
+        assertThat(request("POST", "/auth/login", correct, null).statusCode()).isEqualTo(429);
+        assertThat(request("PATCH", "/auth/password", wrongChange, customer).statusCode()).isEqualTo(429);
+        db.update("UPDATE users SET password_failure_window=DATEADD('MINUTE',-16,CURRENT_TIMESTAMP) WHERE role='CUSTOMER'");
+        var success = request("POST", "/auth/login", correct, null);
+        assertThat(success.statusCode()).isEqualTo(200);
+        assertThat(success.headers().firstValue("Cache-Control")).hasValue("no-store");
+        assertThat(db.queryForObject("SELECT password_failure_count FROM users WHERE role='CUSTOMER'", Integer.class)).isZero();
+    }
+
+    @Test void directStaffProvisionSendsGeneratedPasswordAndRollsBackOnMailFailure() throws Exception {
+        var body = Map.of("fullName", "Nhân viên", "phone", "0900000003", "email", "staff@test.invalid",
+            "identityCard", "123456789012", "rank", "STANDARD", "dateOfBirth", "1998-06-18");
+        doThrow(new MailSendException("SMTP unavailable")).when(mailSender).send(any(SimpleMailMessage.class));
+        assertThat(request("POST", "/admin/staff", body, admin).statusCode()).isEqualTo(503);
+        assertThat(db.queryForObject("SELECT count(*) FROM users WHERE role='STAFF'", Integer.class)).isZero();
+
+        org.mockito.Mockito.reset(mailSender);
+        var result = request("POST", "/admin/staff", body, admin);
+        assertThat(result.statusCode()).isEqualTo(201);
+        String password = staffPassword();
+        assertThat(result.body()).doesNotContain(password, "password_hash", "accessToken");
+        assertThat(request("POST", "/auth/login",
+            Map.of("identifier", "staff@test.invalid", "password", password, "role", "STAFF"), null).statusCode()).isEqualTo(200);
+    }
     @Test void recruitmentRequiresReviewAndCreatesExactlyOneStaff() throws Exception {
         long id=candidate(); String path="/admin/candidates/"+id;
-        var provision=Map.of("password","StaffTest!123","rank","STANDARD");
+        var provision=Map.of("rank","STANDARD");
         assertThat(request("POST",path+"/staff-account",provision,admin).statusCode()).isEqualTo(409);
         assertThat(request("PATCH",path,Map.of("status","EVALUATION","trainingScore",100),admin).statusCode()).isEqualTo(409);
         assertThat(request("PATCH",path,Map.of("status","ONBOARDING"),admin).statusCode()).isEqualTo(200);
@@ -243,7 +302,7 @@ class AccountApiTests {
         var futures=List.of(CompletableFuture.supplyAsync(()->provisionRequest(path,provision)),CompletableFuture.supplyAsync(()->provisionRequest(path,provision)));
         assertThat(futures.stream().map(CompletableFuture::join).sorted().toList()).containsExactly(201,409);
         assertThat(db.queryForObject("SELECT count(*) FROM staffs",Integer.class)).isEqualTo(1);
-        String staff=token(request("POST","/auth/login",Map.of("identifier","staff@test.invalid","password","StaffTest!123"),null));
+        String staff=token(request("POST","/auth/login",Map.of("identifier","staff@test.invalid","password",staffPassword()),null));
         assertThat(request("GET","/auth/profile",null,staff).body()).contains("Ứng viên thử nghiệm","STAFF");
         assertThat(request("GET","/auth/profile",null,staff).body()).contains("1998-06-18","https://res.cloudinary.com/test/image/upload/cleanmaster/avatars/");
         assertThat(db.queryForObject("SELECT birth_year FROM staffs",Integer.class)).isEqualTo(1998);
@@ -256,6 +315,48 @@ class AccountApiTests {
         assertThat(request("GET","/admin/customers",null,staff).statusCode()).isEqualTo(403);
         assertThat(request("GET","/admin/staff",null,admin).body()).contains("Ứng viên thử nghiệm");
     }
+    @Test void failedCredentialEmailRollsBackStaffProvision() throws Exception {
+        long id = candidate();
+        evaluate(id);
+        doThrow(new MailSendException("SMTP unavailable")).when(mailSender).send(any(SimpleMailMessage.class));
+
+        var response = request("POST", "/admin/candidates/" + id + "/staff-account",
+            Map.of("rank", "STANDARD"), admin);
+        assertThat(response.statusCode()).isEqualTo(503);
+        assertThat(db.queryForObject("SELECT count(*) FROM staffs", Integer.class)).isZero();
+        assertThat(db.queryForObject("SELECT count(*) FROM users WHERE role='STAFF'", Integer.class)).isZero();
+        assertThat(request("GET", "/admin/candidates", null, admin).body()).doesNotContain("credentialsEmailSent");
+    }
+
+    @Test void customersAndStaffCanChangeOnlyTheirOwnPassword() throws Exception {
+        String customer = token(request("POST", "/auth/register", registration(), null));
+        long id = candidate();
+        evaluate(id);
+        assertThat(request("POST", "/admin/candidates/" + id + "/staff-account",
+            Map.of("rank", "STANDARD"), admin).statusCode()).isEqualTo(201);
+        String initialStaffPassword = staffPassword();
+        String staff = token(request("POST", "/auth/login",
+            Map.of("identifier", "staff@test.invalid", "password", initialStaffPassword), null));
+        String otherCustomerSession = token(request("POST", "/auth/login",
+            Map.of("identifier", "customer@test.invalid", "password", "Customer!123"), null));
+        var valid = Map.of("currentPassword", "Customer!123", "newPassword", "NewCustomer!123",
+            "confirmPassword", "NewCustomer!123");
+        assertThat(request("PATCH", "/auth/password", valid, null).statusCode()).isEqualTo(401);
+        assertThat(request("PATCH", "/auth/password", valid, admin).statusCode()).isEqualTo(403);
+        assertThat(request("PATCH", "/auth/password", valid, staff).statusCode()).isEqualTo(400);
+        assertThat(request("PATCH", "/auth/password", Map.of("currentPassword", "Customer!123",
+            "newPassword", "NewCustomer!123", "confirmPassword", "NotTheSame!123"), customer).statusCode()).isEqualTo(400);
+        assertThat(request("PATCH", "/auth/password", valid, customer).statusCode()).isEqualTo(204);
+        assertThat(request("GET", "/auth/me", null, otherCustomerSession).statusCode()).isEqualTo(401);
+        assertThat(request("GET", "/auth/me", null, customer).statusCode()).isEqualTo(200);
+        assertThat(request("PATCH", "/auth/password", Map.of("currentPassword", initialStaffPassword,
+            "newPassword", "NewStaff!123", "confirmPassword", "NewStaff!123"), staff).statusCode()).isEqualTo(204);
+
+        assertThat(request("POST", "/auth/login", Map.of("identifier", "0900000002", "password", "Customer!123"), null).statusCode()).isEqualTo(401);
+        assertThat(request("POST", "/auth/login", Map.of("identifier", "0900000002", "password", "NewCustomer!123"), null).statusCode()).isEqualTo(200);
+        assertThat(request("POST", "/auth/login", Map.of("identifier", "staff@test.invalid", "password", initialStaffPassword), null).statusCode()).isEqualTo(401);
+        assertThat(request("POST", "/auth/login", Map.of("identifier", "staff@test.invalid", "password", "NewStaff!123"), null).statusCode()).isEqualTo(200);
+    }
     int provisionRequest(String path,Object body) {
         try { return request("POST",path+"/staff-account",body,admin).statusCode(); }
         catch(Exception ex) { throw new RuntimeException(ex); }
@@ -263,17 +364,17 @@ class AccountApiTests {
     @Test void duplicateContactRollsBackProvisionAndLeavesCandidateUnchanged() throws Exception {
         long id=candidate();evaluate(id);
         request("POST","/auth/register",Map.of("fullName","Khách hàng","phone","0900000004","email","staff@test.invalid","password","Customer!123"),null);
-        assertThat(request("POST","/admin/candidates/"+id+"/staff-account",Map.of("password","StaffTest!123","rank","INTERN"),admin).statusCode()).isEqualTo(409);
+        assertThat(request("POST","/admin/candidates/"+id+"/staff-account",Map.of("rank","INTERN"),admin).statusCode()).isEqualTo(409);
         assertThat(db.queryForObject("SELECT count(*) FROM staffs",Integer.class)).isZero();
         assertThat(db.queryForObject("SELECT staff_id FROM staff_candidates WHERE id=?",Long.class,id)).isNull();
         assertThat(db.queryForObject("SELECT count(*) FROM users WHERE role='STAFF'",Integer.class)).isZero();
     }
     @Test void staffUpdatesPersistAndDuplicatePhoneRollsBackStatusAndTokenRevocation() throws Exception {
         long candidateId=candidate(); evaluate(candidateId);
-        var created=request("POST","/admin/candidates/"+candidateId+"/staff-account",Map.of("password","StaffTest!123","rank","STANDARD"),admin);
+        var created=request("POST","/admin/candidates/"+candidateId+"/staff-account",Map.of("rank","STANDARD"),admin);
         assertThat(created.statusCode()).isEqualTo(201);
         long id=json.readTree(created.body()).get("staffId").asLong();
-        String staff=token(request("POST","/auth/login",Map.of("identifier","staff@test.invalid","password","StaffTest!123"),null));
+        String staff=token(request("POST","/auth/login",Map.of("identifier","staff@test.invalid","password",staffPassword()),null));
         var duplicate=Map.of("fullName","Tên thay đổi","phone","0900000001","status","LOCKED","statusNote","Thử rollback","rank","PROFESSIONAL");
         assertThat(request("PATCH","/admin/staff/"+id,duplicate,admin).statusCode()).isEqualTo(409);
         assertThat(request("GET","/auth/me",null,staff).statusCode()).isEqualTo(200);

@@ -79,6 +79,13 @@ public class AccountController {
         accounts.logout(token);
     }
 
+    @PatchMapping("/auth/password")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void changePassword(@RequestHeader(value = "Authorization", required = false) String token,
+                               @Valid @RequestBody ChangePassword body) {
+        accounts.changePassword(token, body);
+    }
+
     @GetMapping("/admin/customers")
     public List<Map<String, Object>> customers(@RequestHeader(value = "Authorization", required = false) String token) {
         accounts.authenticate(token, true);
