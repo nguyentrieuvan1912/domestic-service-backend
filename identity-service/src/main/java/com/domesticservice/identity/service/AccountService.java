@@ -6,6 +6,7 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -16,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import tools.jackson.databind.ObjectMapper;
 import com.domesticservice.identity.repository.AccountSqlRepository;
+import com.domesticservice.identity.repository.AccountSqlRepository.PasswordAccount;
 import com.domesticservice.identity.dto.AccountResponse.*;
 import com.domesticservice.identity.dto.RegistrationResponse.Challenge;
 import com.domesticservice.identity.dto.RegistrationResponse.Verified;
@@ -30,20 +32,28 @@ public class AccountService {
     private final ObjectMapper json;
 
     private final RegistrationVerificationService verification;
+    private final RegistrationMailer mailer;
 
     private final BCryptPasswordEncoder passwords = new BCryptPasswordEncoder(12);
 
     private final String dummyHash = passwords.encode("invalid-login-placeholder");
 
+    private static final SecureRandom RANDOM = new SecureRandom();
+    private static final Duration PASSWORD_FAILURE_WINDOW = Duration.ofMinutes(15);
+    private static final int MAX_PASSWORD_FAILURES = 5;
+    private static final String INVALID_LOGIN = "Thông tin đăng nhập không đúng hoặc tài khoản không hoạt động.";
+
     private static final List<String> STAGES = List.of("PENDING", "ONBOARDING", "TRAINING", "EVALUATION");
 
     private static final List<String> DOCUMENTS = List.of("Bản sao CCCD", "Hộ khẩu / KT3", "Giấy khám sức khỏe");
 
-    public AccountService(AccountSqlRepository repository, ObjectMapper json, RegistrationVerificationService verification, AvatarService avatars) {
+    public AccountService(AccountSqlRepository repository, ObjectMapper json, RegistrationVerificationService verification,
+                          AvatarService avatars, RegistrationMailer mailer) {
         this.avatars = avatars;
         this.repository = repository;
         this.json = json;
         this.verification = verification;
+        this.mailer = mailer;
     }
 
     public Challenge sendRegistrationCode(EmailStart request) {
@@ -91,24 +101,60 @@ public class AccountService {
         repository.bootstrapInsertAdmins(id);
     }
 
+    @Transactional(noRollbackFor = PasswordRejected.class)
     public Session login(Login request) {
-        if (request.password().getBytes(StandardCharsets.UTF_8).length > 72)
-            throw error(HttpStatus.UNAUTHORIZED, "Thông tin đăng nhập không đúng hoặc tài khoản không hoạt động.");
-        var rows = repository.loginFindUsers(request.identifier().strip().toLowerCase(Locale.ROOT), normalizePhone(request.identifier().strip()), request.identifier().strip().toLowerCase(Locale.ROOT));
+        String identifier = request.identifier().strip().toLowerCase(Locale.ROOT);
+        var rows = repository.loginFindUsers(identifier, normalizePhone(identifier));
         var row = rows.size() == 1 ? rows.getFirst() : null;
-        String encoded = row == null ? dummyHash : (String) row.get("password_hash");
-        boolean valid = passwords.matches(request.password(), encoded.startsWith("$2") ? encoded : dummyHash);
-        if (row == null || !encoded.startsWith("$2") || !valid || !"ACTIVE".equals(row.get("status")))
-            throw error(HttpStatus.UNAUTHORIZED, "Thông tin đăng nhập không đúng hoặc tài khoản không hoạt động.");
-        long id = ((Number) row.get("id")).longValue();
-        repository.loginUpdateUsers(id);
-        return issue(id);
+        Instant now = Instant.now();
+        boolean active = row != null && "ACTIVE".equals(row.status());
+        if (active) checkPasswordBudget(row, now);
+        if (!matchesPassword(request.password(), row) || !active) {
+            if (active) recordPasswordFailure(row, now);
+            throw new PasswordRejected(HttpStatus.UNAUTHORIZED, INVALID_LOGIN);
+        }
+        if (request.role() != null && !request.role().equals(row.role()))
+            throw error(HttpStatus.UNAUTHORIZED, INVALID_LOGIN);
+        repository.loginUpdateUsers(row.id());
+        return issue(row.id());
+    }
+
+    private boolean matchesPassword(String raw, PasswordAccount account) {
+        if (raw.getBytes(StandardCharsets.UTF_8).length > 72) return false;
+        boolean hasHash = account != null && account.hash().startsWith("$2");
+        return passwords.matches(raw, hasHash ? account.hash() : dummyHash) && hasHash;
+    }
+
+    private boolean withinPasswordWindow(PasswordAccount account, Instant now) {
+        return account.windowStartedAt() != null && account.windowStartedAt().plus(PASSWORD_FAILURE_WINDOW).isAfter(now);
+    }
+
+    private void checkPasswordBudget(PasswordAccount account, Instant now) {
+        if (withinPasswordWindow(account, now) && account.failures() >= MAX_PASSWORD_FAILURES)
+            throw error(HttpStatus.TOO_MANY_REQUESTS, "Đã thử mật khẩu quá nhiều lần. Vui lòng chờ 15 phút rồi thử lại.");
+    }
+
+    private void recordPasswordFailure(PasswordAccount account, Instant now) {
+        boolean sameWindow = withinPasswordWindow(account, now);
+        repository.recordPasswordFailure(account.id(), sameWindow ? account.failures() + 1 : 1,
+            sameWindow ? account.windowStartedAt() : now);
+    }
+
+    // Failed password checks must commit their counters. Other exceptions still roll back.
+    private static final class PasswordRejected extends ResponseStatusException {
+        private PasswordRejected(HttpStatus status, String message) {
+            super(status, message);
+        }
+    }
+
+    private String randomSecret(int bytesCount) {
+        byte[] bytes = new byte[bytesCount];
+        RANDOM.nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     private Session issue(long id) {
-        byte[] bytes = new byte[32];
-        new SecureRandom().nextBytes(bytes);
-        String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        String token = randomSecret(32);
         User account = user(id);
         long sessionHours = "STAFF".equals(account.role()) ? 24 : 8;
         Instant expiry = Instant.now().plus(sessionHours, ChronoUnit.HOURS);
@@ -140,6 +186,30 @@ public class AccountService {
     public void logout(String header) {
         if (header != null && header.startsWith("Bearer "))
             repository.logoutDeleteAccountSessions(digest(header.substring(7)));
+    }
+
+    @Transactional(noRollbackFor = PasswordRejected.class)
+    public void changePassword(String header, ChangePassword request) {
+        User current = authenticate(header, false);
+        if (!"CUSTOMER".equals(current.role()) && !"STAFF".equals(current.role()))
+            throw error(HttpStatus.FORBIDDEN, "Chức năng này dành cho khách hàng và nhân viên.");
+        if (!request.newPassword().equals(request.confirmPassword()))
+            throw error(HttpStatus.BAD_REQUEST, "Hai lần nhập mật khẩu mới không khớp.");
+
+        var account = repository.passwordAccount(current.id());
+        authenticate(header, false);
+        Instant now = Instant.now();
+        checkPasswordBudget(account, now);
+        if (!matchesPassword(request.currentPassword(), account)) {
+            recordPasswordFailure(account, now);
+            throw new PasswordRejected(HttpStatus.BAD_REQUEST, "Mật khẩu hiện tại không đúng.");
+        }
+        if (request.currentPassword().equals(request.newPassword()))
+            throw error(HttpStatus.BAD_REQUEST, "Mật khẩu mới phải khác mật khẩu hiện tại.");
+
+        if (repository.updatePassword(current.id(), account.hash(), hashPassword(request.newPassword())) != 1)
+            throw error(HttpStatus.CONFLICT, "Tài khoản vừa thay đổi. Vui lòng kiểm tra lại và thử lại.");
+        repository.revokeOtherSessions(current.id(), digest(header.substring(7)));
     }
 
     private User user(long id) {
@@ -180,7 +250,8 @@ public class AccountService {
     public Map<String, Object> createStaff(User admin, StaffCreate body) {
         if (!"ADMIN".equals(admin.role()))
             throw error(HttpStatus.FORBIDDEN, "Chỉ Admin được cấp tài khoản nhân viên.");
-        long id = createUser(body.fullName(), body.phone(), body.email(), body.password(), "STAFF");
+        String initialPassword = randomSecret(24);
+        long id = createUser(body.fullName(), body.phone(), body.email(), initialPassword, "STAFF");
         try {
             repository.createStaffInsertStaffs(id, body.identityCard().strip(), body.rank(), admin.id());
         } catch (DataIntegrityViolationException ex) {
@@ -188,7 +259,9 @@ public class AccountService {
         }
         avatars.save(id, body.avatar(), true);
         saveStaffDetails(id, body.dateOfBirth(), body.birthYear(), body.gender(), body.experienceYears(), body.bio());
-        return profile(user(id));
+        var account = user(id);
+        mailer.sendStaffCredentials(account.email(), initialPassword);
+        return profile(account);
     }
 
     public Map<String, Object> staffOnline(User user, boolean online) {
@@ -426,7 +499,8 @@ public class AccountService {
             throw error(HttpStatus.CONFLICT, "Ứng viên đã được cấp tài khoản.");
         if (!"EVALUATION".equals(data.get("status")) || data.get("trainingScore") == null)
             throw error(HttpStatus.CONFLICT, "Chỉ cấp tài khoản sau khi hoàn tất xét duyệt và đào tạo.");
-        long staffId = createUser((String) data.get("fullName"), (String) data.get("phone"), (String) data.get("email"), request.password(), "STAFF");
+        String initialPassword = randomSecret(24);
+        long staffId = createUser((String) data.get("fullName"), (String) data.get("phone"), (String) data.get("email"), initialPassword, "STAFF");
         try {
             repository.provisionInsertStaffs(staffId, data.get("cccd"), switch((String) data.get("gender")) {
                 case "Nam" ->
@@ -444,8 +518,10 @@ public class AccountService {
         data.put("staffId", staffId);
         data.put("rank", request.rank());
         data.put("subStatus", "Đã chuyển thành nhân viên chính thức");
+        data.put("credentialsEmailSent", true);
         saveCandidate(id, data);
         repository.provisionUpdateStaffCandidates(staffId, id);
+        mailer.sendStaffCredentials(user(staffId).email(), initialPassword);
         return data;
     }
 

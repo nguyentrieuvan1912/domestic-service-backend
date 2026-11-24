@@ -1,6 +1,6 @@
 # Identity API — đã triển khai cho Web
 
-Owner: Người 1. Consumer hiện tại: domestic-service-web. Prefix `/api/v1/identity`; gọi qua Gateway 8080.
+Owner: Người 1. Consumer hiện tại: domestic-service-web và domestic-service-mobile. Prefix `/api/v1/identity`; gọi qua Gateway 8080.
 ID JSON là số Long/BIGINT. Ngày giờ ISO-8601 UTC. Lỗi HTTP 400/401/403/404/409 dạng `application/problem+json` với `detail`; validation thêm `errors`.
 
 ## Xác thực
@@ -10,15 +10,17 @@ ID JSON là số Long/BIGINT. Ngày giờ ISO-8601 UTC. Lỗi HTTP 400/401/403/4
 | POST | /auth/register/email | Public | `{email}` → gửi mã Gmail, trả challengeId/expiresAt/resendAt |
 | POST | /auth/register/verify | Public | `{challengeId,code}` → verificationToken sau xác thực |
 | POST | /auth/register | Public | `{fullName,phone,verificationToken,password}` → HTTP 201 session |
-| POST | /auth/login | Public | `{identifier,password}` → HTTP 200 session; identifier là email, số điện thoại hoặc user_name |
+| POST | /auth/login | Public | `{identifier,password,role?}` → HTTP 200 session. Identifier là email, số điện thoại hoặc user_name. Nếu có role, tài khoản phải thuộc vai trò đó. |
 | GET | /auth/me | Bearer | `{id,fullName,phone,email,role,status}` |
 | POST | /auth/logout | Bearer nếu có | HTTP 204; thu hồi token hiện tại; có thể gọi lại |
+| PATCH | /auth/password | CUSTOMER/STAFF | `{currentPassword,newPassword,confirmPassword}` → 204. Giữ phiên hiện tại và thu hồi các phiên khác của tài khoản. |
 
 Session: `{accessToken,expiresAt,user:{id,fullName,phone,email,role,status}}`.
 Đăng ký public luôn tạo CUSTOMER ACTIVE, bỏ qua role/status/ID do client gửi. Không có đăng ký public cho ADMIN/STAFF.
 Email được trim/lowercase; số điện thoại `0` + 9 số hoặc `+84` + 9 số, lưu chuẩn `0` + 9 số.
 Tên tối đa 160 ký tự; email tối đa 254; mật khẩu tối thiểu 8 ký tự, tối đa 72 byte UTF-8, BCrypt cost 12.
 Email/số điện thoại trùng → 409; thông tin sai, tài khoản INACTIVE/BLOCKED → 401.
+Sau 5 lần nhập sai mật khẩu trong 15 phút, các lần thử tiếp theo bị từ chối với HTTP 429 cho đến hết khoảng thời gian này. Giới hạn lưu trong Identity DB và áp dụng chung cho các định danh của một tài khoản và thao tác xác minh mật khẩu khi đổi mật khẩu.
 
 Token là 32 byte ngẫu nhiên, base64url. Phiên mới của nhân viên có hạn 24 giờ, phiên khách hàng và quản trị viên có hạn 8 giờ. Database `account_sessions` chỉ lưu SHA-256 của token.
 Gửi `Authorization: Bearer <accessToken>`; mỗi yêu cầu kiểm tra phiên chưa hết hạn và users.status ACTIVE.
@@ -47,8 +49,9 @@ Không xóa khách hàng để giữ tham chiếu booking. Tổng booking lấy 
 | GET | /admin/candidates | Array hồ sơ ứng viên, id số, registeredAt ISO, staffId số hoặc null |
 | POST | /admin/candidates | `{fullName,phone,email,cccd,birthYear,gender,area,source,services,note}` → 201 hồ sơ PENDING |
 | PATCH | /admin/candidates/{id} | Chuyển giai đoạn theo thứ tự, trả hồ sơ đã lưu |
-| POST | /admin/candidates/{id}/staff-account | `{password,rank}` → 201 hồ sơ với staffId |
+| POST | /admin/candidates/{id}/staff-account | `{rank,avatar}` → 201 hồ sơ với staffId |
 | GET | /admin/staff | Array `{id,fullName,phone,identityCard,status,statusNote,rank,joinDate,averageRating}` |
+| POST | /admin/staff | `{fullName,phone,email,identityCard,rank,avatar,dateOfBirth,birthYear,gender,experienceYears,bio}` → 201 hồ sơ nhân viên |
 | PATCH | /admin/staff/{id} | `{fullName,phone,status,statusNote,rank}` → 204 |
 
 Luồng bắt buộc: PENDING → ONBOARDING → TRAINING → EVALUATION → admin duyệt và tạo Staff.
@@ -58,11 +61,11 @@ Luồng bắt buộc: PENDING → ONBOARDING → TRAINING → EVALUATION → adm
 - PATCH sang ONBOARDING: `{status:"ONBOARDING"}`.
 - PATCH sang TRAINING: thêm documentChecklist đủ `Bản sao CCCD`, `Hộ khẩu / KT3`, `Giấy khám sức khỏe`, và onboardingNote không rỗng.
 - PATCH sang EVALUATION: thêm trainingScore 0..100 và trainingNotes không rỗng. Chưa tạo account ở bước này.
-- Tạo Staff: chỉ EVALUATION chưa có staffId. Admin chọn rank INTERN/STANDARD/PROFESSIONAL và nhập mật khẩu khởi tạo.
+- Tạo Staff từ ứng viên: chỉ EVALUATION chưa có staffId. Admin chọn rank INTERN/STANDARD/PROFESSIONAL.
   Email/phone/CCCD lấy từ hồ sơ đã lưu, không nhận từ request cấp account. Tài khoản STAFF ACTIVE, trạng thái hoạt động OFFLINE.
   approved_by/approved_at được ghi nhận. Hồ sơ users/staffs và liên kết candidate nằm trong một transaction;
   khóa hàng candidate ngăn hai yêu cầu đồng thời tạo trùng. Trùng email/phone/CCCD hoặc đã cấp → 409; rollback không tạo account dở dang.
-- Web dùng email để bàn giao tài khoản; không giả báo đã gửi email. Mật khẩu không trả trong response và không lưu plaintext.
+- Với cả hai cách cấp tài khoản, Identity sinh mật khẩu ngẫu nhiên và gửi trực tiếp đến email nhân viên. Lỗi SMTP trả 503 và rollback tài khoản. API không trả mật khẩu và database chỉ lưu BCrypt.
 - birthYear giữ trong hồ sơ ứng viên; không suy diễn ngày/tháng sinh cho staffs.date_of_birth.
 - account_rank là metadata xếp hạng tài khoản tuyển dụng. Năng lực Staff–Service, vùng hoạt động/lịch rảnh thuộc Booking;
   thu nhập/chi trả thuộc Finance. Web giữ bố cục tab và hiển thị chưa kết nối cho các mục chưa có API, không ghi dữ liệu giả.
